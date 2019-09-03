@@ -18,8 +18,10 @@ signed char _v0 = 0;
 signed char _v1 = 0;
 unsigned long _lastSent = 0;
 unsigned long _ms = 0;
+unsigned long _counter = 0;
+unsigned long _prev_ms = 0;
 
-HardwareSerial serial_ext(2);
+HardwareSerial serial_ext(2); // Serial from/to V via GROVE
 
 void setup()
 {
@@ -27,44 +29,60 @@ void setup()
 
   Serial.begin(115200);
   Serial.println("Waiting for connections...");
-  Blynk.setDeviceName("BeetleC");
+  Blynk.setDeviceName("BeetleC-AutoDrive");
   Blynk.begin(auth);
+
+  // M5StickV
   int baud = 4500000; // 115200 1500000 3000000 4500000
   serial_ext.begin(baud, SERIAL_8N1, 32, 33);
 
   // LCD
   M5.Axp.ScreenBreath(0);
 
-  // BeetleC
+  // Control BeetleC Motor,LED
   Wire.begin(0, 26);
-
 }
 
 void loop()
 {
   _ms = millis();
 
-  Blynk.run();
+  #define LOOPS 20000
+  if(_counter % LOOPS == 0){
+    if(0 < _prev_ms){
+      Serial.printf("counter=%d: loop=%d/sec.\n", _counter, 1000*LOOPS/(_ms-_prev_ms));
+    }
+    _prev_ms = _ms;
+  }
+  _counter += 1;
 
-  if (_lastSent + 1000 < _ms) {
+  Blynk.run();
+  #define HEARTBEAT_TO_V_MS (1000*20)
+  if (_lastSent + HEARTBEAT_TO_V_MS < _ms) {
     sendToCar();
     sendToM5StickV();
     _lastSent = _ms;
   }
 
-  String s = readLineFromV();
+  String s;
+  s = readLineFromV();
   if (0 < s.length()) {
-    Serial.printf("%s\n", s.c_str());
+    Serial.printf("V: %s\n", s.c_str());
+  }
+
+  s = readLineFromDebug();
+  if (0 < s.length()) {
+    Serial.printf("D: %s\n", s.c_str());
   }
 }
 
-BLYNK_WRITE(V0)
+BLYNK_WRITE(V0) // power
 {
   _v0 = param[0].asInt();
   _lastSent = 0;
 }
 
-BLYNK_WRITE(V1)
+BLYNK_WRITE(V1) // steering
 {
   _v1 = param[0].asInt();
   _lastSent = 0;
@@ -72,10 +90,14 @@ BLYNK_WRITE(V1)
 
 void sendToCar()
 {
-  signed char left  = _v0 / 2;
-  signed char right = _v1 / 2;
-  #define POWER_MIN 10
-  #define POWER_MAX 40
+  signed int power = _v0 * 1.0;
+  signed int steer = 100 * _v1 / 127 * 1.0;
+
+  signed int left  = power * (100 - steer) / 100;
+  signed int right = power * (100 + steer) / 100;
+
+  #define POWER_MIN   5
+  #define POWER_MAX 100
   if(-POWER_MIN < left  && left  < POWER_MIN){ left  = 0; }
   if(-POWER_MIN < right && right < POWER_MIN){ right = 0; }
   if(POWER_MAX < left){  left  = POWER_MAX; }
@@ -117,6 +139,14 @@ int readFromV(uint8_t *buffer, size_t size) {
 String readLineFromV(void) {
   if (serial_ext.available()) {
     return serial_ext.readStringUntil('\n');
+  } else {
+    return String("");
+  }
+}
+
+String readLineFromDebug(void) {
+  if (Serial.available()) {
+    return Serial.readStringUntil('\n');
   } else {
     return String("");
   }
