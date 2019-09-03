@@ -10,17 +10,17 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-
 #include "secret.h"
 //char auth[] = "*****";
 
-signed char _v0 = 0;
-signed char _v1 = 0;
-unsigned long _lastSent = 0;
+signed char _power = 0;
+signed char _steering = 0;
+bool _controlUpdated = false;
+unsigned long _lastSentToV = 0;
 unsigned long _ms = 0;
 unsigned long _counter = 0;
-unsigned long _prev_ms = 0;
-
+uint8_t _car_left  = 0;
+uint8_t _car_right = 0;
 HardwareSerial serial_ext(2); // Serial from/to V via GROVE
 
 void setup()
@@ -47,21 +47,16 @@ void loop()
 {
   _ms = millis();
 
-  #define LOOPS 20000
-  if(_counter % LOOPS == 0){
-    if(0 < _prev_ms){
-      Serial.printf("counter=%d: loop=%d/sec.\n", _counter, 1000*LOOPS/(_ms-_prev_ms));
-    }
-    _prev_ms = _ms;
-  }
-  _counter += 1;
-
+  debugLoopCount();
   Blynk.run();
-  #define HEARTBEAT_TO_V_MS (1000*20)
-  if (_lastSent + HEARTBEAT_TO_V_MS < _ms) {
-    sendToCar();
+
+  sendToCar();
+
+  #define HEARTBEAT_TO_V_MS (1000*5)
+  if (_controlUpdated || _lastSentToV + HEARTBEAT_TO_V_MS < _ms) {
     sendToM5StickV();
-    _lastSent = _ms;
+    _lastSentToV = _ms;
+    _controlUpdated = false;
   }
 
   String s;
@@ -76,50 +71,87 @@ void loop()
   }
 }
 
-BLYNK_WRITE(V0) // power
+BLYNK_WRITE(V0) // power(-100..+100)
 {
-  _v0 = param[0].asInt();
-  _lastSent = 0;
+  _power = param[0].asInt();
+  _controlUpdated = true;
 }
 
-BLYNK_WRITE(V1) // steering
+BLYNK_WRITE(V1) // steering(-100..+100)
 {
-  _v1 = param[0].asInt();
-  _lastSent = 0;
+  _steering = param[0].asInt();
+  _controlUpdated = true;
 }
 
 void sendToCar()
 {
-  signed int power = _v0 * 1.0;
-  signed int steer = 100 * _v1 / 127 * 1.0;
+  // steer by rate
+  //signed int power = _power    * 0.3;
+  //signed int steer = _steering * 0.7;
+  //signed int left  = power * (100 - steer) / 100;
+  //signed int right = power * (100 + steer) / 100;
 
-  signed int left  = power * (100 - steer) / 100;
-  signed int right = power * (100 + steer) / 100;
+  // steer by abs
+  signed int power = _power    * 0.3;
+  signed int steer = _steering * 0.3;
+  signed int left  = power - steer;
+  signed int right = power + steer;
 
-  #define POWER_MIN   5
-  #define POWER_MAX 100
-  if(-POWER_MIN < left  && left  < POWER_MIN){ left  = 0; }
-  if(-POWER_MIN < right && right < POWER_MIN){ right = 0; }
-  if(POWER_MAX < left){  left  = POWER_MAX; }
-  if(POWER_MAX < right){ right = POWER_MAX; }
-  if(left  < -POWER_MAX){ left  = -POWER_MAX; }
-  if(right < -POWER_MAX){ right = -POWER_MAX; }
+#define POWER_MIN   1
+#define POWER_MAX 100
+  if (-POWER_MIN < left  && left  < POWER_MIN) {
+    left  = 0;
+  }
+  if (-POWER_MIN < right && right < POWER_MIN) {
+    right = 0;
+  }
+  if (POWER_MAX < left) {
+    left  = POWER_MAX;
+  }
+  if (POWER_MAX < right) {
+    right = POWER_MAX;
+  }
+  if (left  < -POWER_MAX) {
+    left  = -POWER_MAX;
+  }
+  if (right < -POWER_MAX) {
+    right = -POWER_MAX;
+  }
 
-  leftwheel((uint8_t)left);
-  rightwheel((uint8_t)right);
+  if(true){ // DYI PWM
+    signed int n = _ms % 100;
+    if(0<left){
+      if(n     < left ){ left =  POWER_MAX; }else{ left  = 0; }
+    }else{
+      if(left  < -n   ){ left = -POWER_MAX; }else{ left  = 0; }
+    }
+    if(0<right){
+      if(n     < right){ right =  POWER_MAX; }else{ right = 0; }
+    }else{
+      if(right < -n   ){ right = -POWER_MAX; }else{ right = 0; }
+    }
+  }
 
-  uint8_t buf[256];
-  size_t size = sprintf((char*)buf, "left=%d right=%d\n", left, right);
-  
-  Serial.printf("%s", buf);
+  if (_car_left != left) {
+    leftwheel((uint8_t)left);
+    _car_left = left;
+  }
+  if (_car_right != right) {
+    rightwheel((uint8_t)right);
+    _car_right = right;
+  }
+
+  //uint8_t buf[256];
+  //size_t size = sprintf((char*)buf, "left=%d right=%d\n", left, right);
+  //Serial.printf("%s", buf);
 }
 
-void sendToM5StickV()                 
+void sendToM5StickV()
 {
   uint8_t buf[256];
-  size_t size = sprintf((char*)buf, "V0=%d V1=%d ms=%ld rtc=%s\n", _v0, _v1, _ms, readRTC().c_str());
+  size_t size = sprintf((char*)buf, "power=%d steering=%d ms=%ld rtc=%s\n", _power, _steering, _ms, readRTC().c_str());
   sendToV(buf, size);
-  
+
   Serial.printf("%s", buf);
 }
 
@@ -185,4 +217,17 @@ void led(uint8_t num, uint32_t val) {
   Wire.write(uint8_t(val >> 8));
   Wire.write(uint8_t(val & 0x0f));
   Wire.endTransmission();
+}
+
+void debugLoopCount()
+{
+  static unsigned long _prevMs = 0;
+  #define LOOPS 20000
+  if (_counter % LOOPS == 0) {
+    if (0 < _prevMs) {
+      Serial.printf("counter=%d: loop=%d/sec.\n", _counter, 1000 * LOOPS / (_ms - _prevMs));
+    }
+    _prevMs = _ms;
+  }
+  _counter += 1;
 }
