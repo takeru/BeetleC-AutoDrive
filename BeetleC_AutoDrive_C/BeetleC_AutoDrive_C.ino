@@ -19,8 +19,8 @@ bool _controlUpdated = false;
 unsigned long _lastSentToV = 0;
 unsigned long _ms = 0;
 unsigned long _counter = 0;
-uint8_t _car_left  = 0;
-uint8_t _car_right = 0;
+uint8_t _car_left  = 1;
+uint8_t _car_right = 1;
 HardwareSerial serial_ext(2); // Serial from/to V via GROVE
 
 void setup()
@@ -119,16 +119,20 @@ void sendToCar()
   }
 
   if(true){ // DYI PWM
-    signed int n = _ms % 100;
+    #define PWM_ON 127
+    #define PWM_WIDTH_MS 100 // 50 25
+    unsigned long us = micros() % (10*1000*1000); // overflow taisaku!
+    unsigned long n = (us * PWM_WIDTH_MS / 1000) % 100;
+
     if(0<left){
-      if(n     < left ){ left =  POWER_MAX; }else{ left  = 0; }
+      if(n     < left ){ left =  PWM_ON; }else{ left  = 0; }
     }else{
-      if(left  < -n   ){ left = -POWER_MAX; }else{ left  = 0; }
+      if(left  < -n   ){ left = -PWM_ON; }else{ left  = 0; }
     }
     if(0<right){
-      if(n     < right){ right =  POWER_MAX; }else{ right = 0; }
+      if(n     < right){ right =  PWM_ON; }else{ right = 0; }
     }else{
-      if(right < -n   ){ right = -POWER_MAX; }else{ right = 0; }
+      if(right < -n   ){ right = -PWM_ON; }else{ right = 0; }
     }
   }
 
