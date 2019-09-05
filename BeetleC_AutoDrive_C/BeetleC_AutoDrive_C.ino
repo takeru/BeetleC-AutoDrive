@@ -13,9 +13,14 @@
 #include "secret.h"
 //char auth[] = "*****";
 
-signed char _power = 0;
-signed char _steering = 0;
+signed char _power         =  0;
+signed char _steering      =  0;
+signed char _power_rate    = 40;
+signed char _steering_rate = 40;
+signed char _pwm_width_ms  = 25;
+
 bool _controlUpdated = false;
+
 unsigned long _lastSentToV = 0;
 unsigned long _ms = 0;
 unsigned long _counter = 0;
@@ -41,6 +46,9 @@ void setup()
 
   // Control BeetleC Motor,LED
   Wire.begin(0, 26);
+
+  leftwheel(0);
+  rightwheel(0);
 }
 
 void loop()
@@ -83,6 +91,24 @@ BLYNK_WRITE(V1) // steering(-100..+100)
   _controlUpdated = true;
 }
 
+BLYNK_WRITE(V11) // power_rate(0..100)
+{
+  _power_rate = param[0].asInt();
+  Serial.printf("D: _power_rate=%d\n", _power_rate);
+}
+
+BLYNK_WRITE(V12) // steering_rate(0..100)
+{
+  _steering_rate = param[0].asInt();
+  Serial.printf("D: _steering_rate=%d\n", _steering_rate);
+}
+
+BLYNK_WRITE(V13) // pwm_width_ms(1..500)
+{
+  _pwm_width_ms = param[0].asInt();
+  Serial.printf("D: _pwm_width_ms=%d\n", _pwm_width_ms);
+}
+
 void sendToCar()
 {
   // steer by rate
@@ -92,38 +118,15 @@ void sendToCar()
   //signed int right = power * (100 + steer) / 100;
 
   // steer by abs
-  signed int power = _power    * 0.3;
-  signed int steer = _steering * 0.3;
+  signed int power = _power    * _power_rate    / 100;
+  signed int steer = _steering * _steering_rate / 100;
   signed int left  = power - steer;
   signed int right = power + steer;
 
-#define POWER_MIN   1
-#define POWER_MAX 100
-  if (-POWER_MIN < left  && left  < POWER_MIN) {
-    left  = 0;
-  }
-  if (-POWER_MIN < right && right < POWER_MIN) {
-    right = 0;
-  }
-  if (POWER_MAX < left) {
-    left  = POWER_MAX;
-  }
-  if (POWER_MAX < right) {
-    right = POWER_MAX;
-  }
-  if (left  < -POWER_MAX) {
-    left  = -POWER_MAX;
-  }
-  if (right < -POWER_MAX) {
-    right = -POWER_MAX;
-  }
-
   if(true){ // DYI PWM
     #define PWM_ON 127
-    #define PWM_WIDTH_MS 100 // 50 25
-    unsigned long us = micros() % (10*1000*1000); // overflow taisaku!
-    unsigned long n = (us * PWM_WIDTH_MS / 1000) % 100;
-
+    #define PWM_WIDTH_US (_pwm_width_ms*1000) // 100 50 25
+    long n = 100 * (micros() % PWM_WIDTH_US) / PWM_WIDTH_US; // 0 <= t < 100
     if(0<left){
       if(n     < left ){ left =  PWM_ON; }else{ left  = 0; }
     }else{
@@ -144,10 +147,6 @@ void sendToCar()
     rightwheel((uint8_t)right);
     _car_right = right;
   }
-
-  //uint8_t buf[256];
-  //size_t size = sprintf((char*)buf, "left=%d right=%d\n", left, right);
-  //Serial.printf("%s", buf);
 }
 
 void sendToM5StickV()
