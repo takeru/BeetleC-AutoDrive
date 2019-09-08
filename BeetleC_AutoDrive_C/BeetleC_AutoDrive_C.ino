@@ -9,6 +9,8 @@
 #include <M5StickC.h>
 #include <Arduino.h>
 #include <Wire.h>
+#include <Wiimote.h>
+
 
 #include "secret.h"
 //char auth[] = "*****";
@@ -28,6 +30,18 @@ uint8_t _car_left  = 1;
 uint8_t _car_right = 1;
 HardwareSerial serial_ext(2); // Serial from/to V via GROVE
 
+bool wiimote_button_down  = false;
+bool wiimote_button_up    = false;
+bool wiimote_button_right = false;
+bool wiimote_button_left  = false;
+bool wiimote_button_plus  = false;
+bool wiimote_button_2     = false;
+bool wiimote_button_1     = false;
+bool wiimote_button_B     = false;
+bool wiimote_button_A     = false;
+bool wiimote_button_minus = false;
+bool wiimote_button_home  = false;
+
 void setup()
 {
   M5.begin();
@@ -36,6 +50,8 @@ void setup()
   Serial.println("Waiting for connections...");
   Blynk.setDeviceName("BeetleC-AutoDrive");
   Blynk.begin(auth);
+  Wiimote::init();
+  Wiimote::register_callback(1, wiimote_callback);
 
   // M5StickV
   int baud = 4500000; // 115200 1500000 3000000 4500000
@@ -57,6 +73,7 @@ void loop()
 
   debugLoopCount();
   Blynk.run();
+  Wiimote::handle();
 
   sendToCar();
 
@@ -77,6 +94,57 @@ void loop()
   if (0 < s.length()) {
     Serial.printf("D: %s\n", s.c_str());
   }
+
+  static unsigned long last_tick = 0;
+  unsigned long tick = (_ms / 50);
+  if(last_tick < tick){
+    if(wiimote_button_2){
+      _power += 2;
+    }
+    if(wiimote_button_1){
+      _power -= 2;
+    }
+    if((!wiimote_button_2) && (!wiimote_button_1)){
+      _power *= 0.90;
+    }
+
+    if(wiimote_button_left){
+      _steering += 5;
+    }
+    if(wiimote_button_right){
+      _steering -= 5;
+    }
+    if((!wiimote_button_left) && (!wiimote_button_right)){
+      _steering *= 0.80;
+    }
+
+    if(_power    < -100     ){ _power    = -100; }
+    if(100       < _power   ){ _power    =  100; }
+    if(_steering < -100     ){ _steering = -100; }
+    if(100       < _steering){ _steering =  100; }
+
+    last_tick = tick;
+  }
+}
+
+void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
+  Serial.printf("wiimote number=%d len=%d ", number, len);
+  for (int i = 0; i < len; i++) {
+    Serial.printf("%02X ", data[i]);
+  }
+  Serial.print("\n");
+
+  wiimote_button_down  = (data[2] & 0x01) != 0;
+  wiimote_button_up    = (data[2] & 0x02) != 0;
+  wiimote_button_right = (data[2] & 0x04) != 0;
+  wiimote_button_left  = (data[2] & 0x08) != 0;
+  wiimote_button_plus  = (data[2] & 0x10) != 0;
+  wiimote_button_2     = (data[3] & 0x01) != 0;
+  wiimote_button_1     = (data[3] & 0x02) != 0;
+  wiimote_button_B     = (data[3] & 0x04) != 0;
+  wiimote_button_A     = (data[3] & 0x08) != 0;
+  wiimote_button_minus = (data[3] & 0x10) != 0;
+  wiimote_button_home  = (data[3] & 0x80) != 0;
 }
 
 BLYNK_WRITE(V0) // power(-100..+100)
