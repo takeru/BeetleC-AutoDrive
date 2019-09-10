@@ -21,14 +21,15 @@ signed char _power_rate    = 40;
 signed char _steering_rate = 40;
 signed char _pwm_width_ms  = 25;
 
-bool _controlUpdated = false;
-
 unsigned long _lastSentToV = 0;
-unsigned long _ms = 0;
-unsigned long _counter = 0;
-uint8_t _car_left  = 1;
-uint8_t _car_right = 1;
+unsigned long _ms          = 0;
+unsigned long _counter     = 0;
+signed int _car_left       = 1;
+signed int _car_right      = 1;
+signed int _output_left    = 0;
+signed int _output_right   = 0;
 HardwareSerial serial_ext(2); // Serial from/to V via GROVE
+
 
 bool wiimote_button_down  = false;
 bool wiimote_button_up    = false;
@@ -78,16 +79,30 @@ void loop()
   sendToCar();
 
   #define HEARTBEAT_TO_V_MS (1000*5)
-  if (_controlUpdated || _lastSentToV + HEARTBEAT_TO_V_MS < _ms) {
-    sendToM5StickV();
+  if (_lastSentToV + HEARTBEAT_TO_V_MS < _ms) {
+    double c_vbat = M5.Axp.GetVbatData() * 1.1 / 1000;
+    uint8_t buf[256];
+    size_t size = sprintf((char*)buf, "hb c_ms=%ld rtc=%s c_vbat=%5.3f power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
+      _ms,
+      readRTC().c_str(),
+      c_vbat,
+      _power_rate,
+      _steering_rate,
+      _pwm_width_ms
+    );
+    sendToV(buf, size);
     _lastSentToV = _ms;
-    _controlUpdated = false;
   }
 
   String s;
   s = readLineFromV();
   if (0 < s.length()) {
     Serial.printf("V: %s\n", s.c_str());
+    if(strncmp(s.c_str(), "v_loop=", 7)==0){
+      uint8_t buf[256];
+      size_t size = sprintf((char*)buf, "c_ms=%ld power=%d steering=%d left=%d right=%d V=[%s]\n", _ms, _power, _steering, _output_left, _output_right, s.c_str());
+      sendToV(buf, size);
+    }
   }
 
   s = readLineFromDebug();
@@ -150,13 +165,11 @@ void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
 BLYNK_WRITE(V0) // power(-100..+100)
 {
   _power = param[0].asInt();
-  _controlUpdated = true;
 }
 
 BLYNK_WRITE(V1) // steering(-100..+100)
 {
   _steering = param[0].asInt();
-  _controlUpdated = true;
 }
 
 BLYNK_WRITE(V11) // power_rate(0..100)
@@ -190,6 +203,8 @@ void sendToCar()
   signed int steer = _steering * _steering_rate / 100;
   signed int left  = power - steer;
   signed int right = power + steer;
+  _output_left  = left;
+  _output_right = right;
 
   if(true){ // DYI PWM
     #define PWM_ON 127
@@ -215,15 +230,6 @@ void sendToCar()
     rightwheel((uint8_t)right);
     _car_right = right;
   }
-}
-
-void sendToM5StickV()
-{
-  uint8_t buf[256];
-  size_t size = sprintf((char*)buf, "power=%d steering=%d ms=%ld rtc=%s\n", _power, _steering, _ms, readRTC().c_str());
-  sendToV(buf, size);
-
-  Serial.printf("%s", buf);
 }
 
 size_t sendToV(uint8_t *buffer, size_t size)
