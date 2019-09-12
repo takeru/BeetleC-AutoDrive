@@ -54,7 +54,7 @@ class Recorder:
 
 class RAMFlashDev:
     def __init__(self):
-            unit = 64
+            unit = 128
             self.fs_size        = 256*unit  # 256*1024
             self.fs_data        = bytearray(self.fs_size)
             self.erase_block    =  32*unit  #  32*1024
@@ -161,7 +161,7 @@ class App():
 
         fm.register(35, fm.fpioa.UART2_TX, force=True)
         fm.register(34, fm.fpioa.UART2_RX, force=True)
-        baud = 4500000 # 115200
+        baud = 1500000 # 115200
         self.uart = UART(UART.UART2, baud, 8, 0, 0, timeout=1000, read_buf_len=4096)
 
         sensor.reset()
@@ -193,12 +193,13 @@ class App():
             line = self.readLineFromC()
             if line and line[0] != 0:
                 line = line.decode('ascii').strip()
+                s = "v_loop=%d v_ms=%d" % (self._loop_counter, time.ticks_ms())
                 if line[0:2] == "hb":
-                    v_vbat = self._axp192.getVbatVoltage()
-                    line += (" v_vbat=%5.3f" % (v_vbat/1000))
+                    s += " " + self.axp192_status_line()
 
-                s = "v_loop=%d v_ms=%d C=[%s]" % (self._loop_counter, time.ticks_ms(), line)
+                s += " C=[%s]" % (line)
                 print(s)
+                time.sleep(0.001)
                 if self._rec:
                     self._rec.write_string("s", s)
             else:
@@ -256,5 +257,17 @@ class App():
         stat = uos.stat(filename)
         print("Close", filename, stat[6], stat)
 
+    def axp192_status_line(self):
+        return "v_vbat=%.1f v_vusb=%.1f v_iusb=%.1f v_vex=%.1f v_iex=%.1f v_ichg=%.1f v_idcg=%.1f v_wbat=%.1f v_temp=%.1f" % (
+            self._axp192.getVbatVoltage(),
+            self._axp192.getUSBVoltage(),
+            self._axp192.getUSBInputCurrent(),
+            self._axp192.getConnextVoltage(),
+            self._axp192.getConnextInputCurrent(),
+            self._axp192.getBatteryChargeCurrent(),
+            self._axp192.getBatteryDischargeCurrent(),
+            self._axp192.getBatteryInstantWatts(),
+            self._axp192.getTemperature()
+        )
 
 App().main()

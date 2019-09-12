@@ -55,7 +55,7 @@ void setup()
   Wiimote::register_callback(1, wiimote_callback);
 
   // M5StickV
-  int baud = 4500000; // 115200 1500000 3000000 4500000
+  int baud = 1500000; // 115200 1500000 3000000 4500000
   serial_ext.begin(baud, SERIAL_8N1, 32, 33);
 
   // LCD
@@ -80,17 +80,35 @@ void loop()
 
   #define HEARTBEAT_TO_V_MS (1000*5)
   if (_lastSentToV + HEARTBEAT_TO_V_MS < _ms) {
-    double c_vbat = M5.Axp.GetVbatData() * 1.1 / 1000;
+    double c_vbat  = M5.Axp.GetVbatData() * 1.1;
+    double c_ichg  = M5.Axp.GetIchargeData() * 0.5;
+    double c_idchg = M5.Axp.GetIdischargeData() * 0.5;
+    double c_vex   = M5.Axp.GetVinData() * 1.7;
+    double c_iex   = M5.Axp.GetIinData() * 0.625;
+    double c_vusb  = M5.Axp.GetVusbinData() * 1.7;
+    double c_iusb  = M5.Axp.GetIusbinData() * 0.375;
+    double c_vaps  = M5.Axp.GetVapsData() *1.4;
+    double c_temp = -144.7 + M5.Axp.GetTempData() * 0.1;
+
     uint8_t buf[256];
-    size_t size = sprintf((char*)buf, "hb c_ms=%ld rtc=%s c_vbat=%5.3f power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
+    size_t size = sprintf((char*)buf, "hb c_ms=%ld rtc=%s c_vbat=%.1f c_ichg=%.1f c_idchg=%.1f c_vex=%.1f c_iex=%.1f c_vusb=%.1f c_iusb=%.1f c_vaps=%.1f c_temp=%.1f power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
       _ms,
       readRTC().c_str(),
       c_vbat,
+      c_ichg,
+      c_idchg,
+      c_vex,
+      c_iex,
+      c_vusb,
+      c_iusb,
+      c_vaps,
+      c_temp,
       _power_rate,
       _steering_rate,
       _pwm_width_ms
     );
     sendToV(buf, size);
+    Serial.printf("%s", buf);
     _lastSentToV = _ms;
   }
 
