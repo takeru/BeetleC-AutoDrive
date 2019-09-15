@@ -183,37 +183,51 @@ class App():
         lcd.clear(lcd.BLUE)
         lcd.draw_string(20, 50, "BeetleC_AutoDrive_V", lcd.YELLOW, lcd.BLUE)
 
-        self._rec          = None
-        self._record_count = 0
-        self._loop_counter = 0
+        self._rec               = None
+        self._record_count      = 0
+        self._loop_counter      = 0
+        self._last_heartbeat_ms = 0
 
     def loop(self):
         self.open_recorder()
+        self.sendToC("loop v_loop=%d v_ms=%d\n" % (self._loop_counter, time.ticks_ms()))
         while True:
             line = self.readLineFromC()
             if line and line[0] != 0:
-                line = line.decode('ascii').strip()
-                s = "v_loop=%d v_ms=%d" % (self._loop_counter, time.ticks_ms())
-                if line[0:2] == "hb":
-                    s += " " + self.axp192_status_line()
-
-                s += " C=[%s]" % (line)
-                print(s)
-                time.sleep(0.001)
-                if self._rec:
-                    self._rec.write_string("s", s)
+                try:
+                    line = line.decode('ascii').strip()
+                except UnicodeError as e:
+                    line = None
             else:
+                line = None
+            if line == None:
                 break
 
+            s = "v_loop=%d v_ms=%d" % (self._loop_counter, time.ticks_ms())
+            s += " C=[%s]" % (line)
+            print(s)
+            time.sleep(0.001)
+            self._rec.write_string("s", s)
+
         self.record()
+
         if self._loop_counter % 100 == 99:
             self.close_recorder()
-        self.sendToC("v_loop=%d v_ms=%d\n" % (self._loop_counter, time.ticks_ms()))
+
+        self.heartbeat()
+
         self._loop_counter += 1
 
     def cleanup(self):
         self.close_recorder()
         uos.umount(self._randisk_mount_point)
+
+    def heartbeat(self):
+        if 5000 < time.ticks_ms() - self._last_heartbeat_ms:
+            s = "hb " + self.system_status_string()
+            self.sendToC(s + "\n")
+            print(s)
+            self._last_heartbeat_ms = time.ticks_ms()
 
     def set_lcd_brightness(self, brightness): # 0...15
         #self._axp192.setScreenBrightness(brightness)
@@ -257,8 +271,9 @@ class App():
         stat = uos.stat(filename)
         print("Close", filename, stat[6], stat)
 
-    def axp192_status_line(self):
-        return "v_vbat=%.1f v_vusb=%.1f v_iusb=%.1f v_vex=%.1f v_iex=%.1f v_ichg=%.1f v_idcg=%.1f v_wbat=%.1f v_temp=%.1f" % (
+    def system_status_string(self):
+        svfs = uos.statvfs("/sd/")
+        return "v_vbat=%.1f v_vusb=%.1f v_iusb=%.1f v_vex=%.1f v_iex=%.1f v_ichg=%.1f v_idcg=%.1f v_wbat=%.1f v_temp=%.1f v_blocks=%d v_bfree=%d" % (
             self._axp192.getVbatVoltage(),
             self._axp192.getUSBVoltage(),
             self._axp192.getUSBInputCurrent(),
@@ -267,7 +282,9 @@ class App():
             self._axp192.getBatteryChargeCurrent(),
             self._axp192.getBatteryDischargeCurrent(),
             self._axp192.getBatteryInstantWatts(),
-            self._axp192.getTemperature()
+            self._axp192.getTemperature(),
+            svfs[2],
+            svfs[3]
         )
 
 App().main()
