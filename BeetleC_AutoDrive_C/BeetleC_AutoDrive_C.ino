@@ -78,6 +78,9 @@ void setup()
 
   leftwheel(0);
   rightwheel(0);
+  led(7, 0);
+
+  led_ready();
 }
 
 void loop()
@@ -137,28 +140,28 @@ void heartbeat(void)
   if (_lastSentToV + HEARTBEAT_TO_V_MS < _ms) {
     double c_vbat  = M5.Axp.GetVbatData() * 1.1;
     _c_vbat = c_vbat;
+    double c_temp = -144.7 + M5.Axp.GetTempData() * 0.1;
     double c_ichg  = M5.Axp.GetIchargeData() * 0.5;
     double c_idchg = M5.Axp.GetIdischargeData() * 0.5;
-    double c_vex   = M5.Axp.GetVinData() * 1.7;
-    double c_iex   = M5.Axp.GetIinData() * 0.625;
     double c_vusb  = M5.Axp.GetVusbinData() * 1.7;
     double c_iusb  = M5.Axp.GetIusbinData() * 0.375;
     double c_vaps  = M5.Axp.GetVapsData() *1.4;
-    double c_temp = -144.7 + M5.Axp.GetTempData() * 0.1;
+    double c_vex   = M5.Axp.GetVinData() * 1.7;
+    double c_iex   = M5.Axp.GetIinData() * 0.625;
 
     uint8_t buf[256];
-    size_t size = sprintf((char*)buf, "hb c_ms=%ld rtc=%s c_vbat=%.1f c_ichg=%.1f c_idchg=%.1f c_vex=%.1f c_iex=%.1f c_vusb=%.1f c_iusb=%.1f c_vaps=%.1f c_temp=%.1f power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
+    size_t size = sprintf((char*)buf, "hb c_ms=%ld rtc=%s c_vbat=%.1f c_temp=%.1f c_ichg=%.1f c_idchg=%.1f c_vusb=%.1f c_iusb=%.1f c_vaps=%.1f c_vex=%.1f c_iex=%.1f power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
       _ms,
       readRTC().c_str(),
       c_vbat,
+      c_temp,
       c_ichg,
       c_idchg,
-      c_vex,
-      c_iex,
       c_vusb,
       c_iusb,
       c_vaps,
-      c_temp,
+      c_vex,
+      c_iex,
       _power_rate,
       _steering_rate,
       _pwm_width_ms
@@ -204,11 +207,11 @@ void wiimote_control(void)
 }
 
 void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
-  Serial.printf("wiimote number=%d len=%d ", number, len);
-  for (int i = 0; i < len; i++) {
-    Serial.printf("%02X ", data[i]);
-  }
-  Serial.print("\n");
+//  Serial.printf("wiimote number=%d len=%d ", number, len);
+//  for (int i = 0; i < len; i++) {
+//    Serial.printf("%02X ", data[i]);
+//  }
+//  Serial.print("\n");
 
   wiimote_button_down  = (data[2] & 0x01) != 0;
   wiimote_button_up    = (data[2] & 0x02) != 0;
@@ -221,6 +224,26 @@ void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
   wiimote_button_A     = (data[3] & 0x08) != 0;
   wiimote_button_minus = (data[3] & 0x10) != 0;
   wiimote_button_home  = (data[3] & 0x80) != 0;
+
+  if(wiimote_button_2 && wiimote_button_1){
+    led(3, 0x010001);
+  }else if(wiimote_button_2){
+    led(3, 0x000001);
+  }else if(wiimote_button_1){
+    led(3, 0x010000);
+  }else{
+    led(3, 0x000000);
+  }
+  if(wiimote_button_right){
+    led(2, 0x030100);
+  }else{
+    led(2, 0x000000);
+  }
+  if(wiimote_button_left){
+    led(4, 0x030100);
+  }else{
+    led(4, 0x000000);
+  }
 }
 
 #if USE_BLYNK
@@ -405,4 +428,33 @@ void debugLoopCount()
     _prev_counter = _counter;
   }
   _counter += 1;
+}
+
+void led_ready(void)
+{
+  led(7, 0);
+  for(int i=0; i<3; i++){
+    led(7, 0);
+    led(0, 0x0f0f0f);
+    delay(50);
+    led(7, 0);
+    led(1, 0x0f0000);
+    delay(50);
+    led(7, 0);
+    led(2, 0x0f0f00);
+    delay(50);
+    led(7, 0);
+    led(3, 0x000f00);
+    delay(50);
+    led(7, 0);
+    led(4, 0x000f0f);
+    delay(50);
+    led(7, 0);
+    led(5, 0x00000f);
+    delay(50);
+    led(7, 0);
+    led(6, 0x0f000f);
+    delay(50);
+  }
+  led(7, 0);
 }
