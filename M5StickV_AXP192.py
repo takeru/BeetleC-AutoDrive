@@ -59,7 +59,7 @@ class App():
 
         # 0xC0(0b11000000) なら「充電オン、充電目標電圧=4.2V、充電終了電流=10%、充電電流=100mA」
         reg0x33 = self.axp192.__readReg(0x33)
-        reg0x33 = (reg0x33 & 0xF0) | 0x01 # 200mA
+        reg0x33 = (reg0x33 & 0xF0) | 0x01 # 190mA
         self.axp192.__writeReg(0x33, reg0x33)
 
         # REG 34H：充電制御2
@@ -86,7 +86,7 @@ class App():
         # bit1    AXP192スイッチモード表示   0：モードA; 1：モードB
         # bit0    予約済み、変更不可
 
-        # self.axp192.setK210Vcore(0.8)
+        self.axp192.setK210Vcore(0.8)
 
     def loop(self):
         self.printRegs()

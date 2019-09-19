@@ -25,7 +25,9 @@ signed char _steering_rate = 40;
 signed char _pwm_width_ms  = 25;
 
 unsigned long _lastSentToV = 0;
+unsigned long _ctrl_sec    = 0;
 unsigned long _ms          = 0;
+unsigned long _sec         = 0;
 unsigned long _counter     = 0;
 signed int _car_left       = 1;
 signed int _car_right      = 1;
@@ -51,7 +53,6 @@ bool wiimote_button_home  = false;
 void setup()
 {
   M5.begin();
-
   //Serial.begin(115200);
   Serial.setTimeout(1);
 
@@ -63,7 +64,7 @@ void setup()
   Wiimote::register_callback(1, wiimote_callback);
 
   // M5StickV
-  int baud = 1500000; // 115200 1500000 3000000 4500000
+  int baud = 115200; //1500000; // 115200 1500000 3000000 4500000
   serial_ext.begin(baud, SERIAL_8N1, 32, 33);
   serial_ext.setTimeout(1);
 
@@ -86,6 +87,7 @@ void setup()
 void loop()
 {
   _ms = millis();
+  _sec = _ms / 1000;
 
   debugLoopCount();
 #if USE_BLYNK
@@ -101,15 +103,15 @@ void loop()
   if (0 < s.length()) {
     bool loop = strncmp(s.c_str(), "loop ", 5)==0;
     if(loop){
-      uint8_t buf[256];
-      size_t size = sprintf((char*)buf, "c_ms=%ld power=%d steering=%d left=%d right=%d V=[%s]\n", _ms, _power, _steering, _output_left, _output_right, s.c_str());
+      uint8_t buf[512];
+      size_t size = sprintf((char*)buf, "ctrl c_ms=%ld power=%d steering=%d left=%d right=%d V=[%s]\n", _ms, _power, _steering, _output_left, _output_right, s.c_str());
       sendToV(buf, size);
     }
     if(!loop){
       Serial.printf("V: %s\n", s.c_str());
     }
 
-    if(strncmp(s.c_str(), "hb ", 3)==0){
+    if(strncmp(s.c_str(), "hb_v ", 5)==0){
       char* c0 = strstr(s.c_str(), "v_vbat=");
       if(c0 != NULL){
         c0 += 7;
@@ -131,6 +133,7 @@ void loop()
 
   wiimote_control();
   update_screen();
+  update_status();
 }
 
 
@@ -148,9 +151,10 @@ void heartbeat(void)
     double c_vaps  = M5.Axp.GetVapsData() *1.4;
     double c_vex   = M5.Axp.GetVinData() * 1.7;
     double c_iex   = M5.Axp.GetIinData() * 0.625;
+    uint8_t c_warn = M5.Axp.GetWarningLeve();
 
     uint8_t buf[256];
-    size_t size = sprintf((char*)buf, "hb c_ms=%ld rtc=%s c_vbat=%.1f c_temp=%.1f c_ichg=%.1f c_idchg=%.1f c_vusb=%.1f c_iusb=%.1f c_vaps=%.1f c_vex=%.1f c_iex=%.1f power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
+    size_t size = sprintf((char*)buf, "hb_c c_ms=%ld rtc=%s c_vbat=%.1f c_temp=%.1f c_ichg=%.1f c_idchg=%.1f c_vusb=%.1f c_iusb=%.1f c_vaps=%.1f c_vex=%.1f c_iex=%.1f c_warn=%d power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
       _ms,
       readRTC().c_str(),
       c_vbat,
@@ -162,6 +166,7 @@ void heartbeat(void)
       c_vaps,
       c_vex,
       c_iex,
+      c_warn,
       _power_rate,
       _steering_rate,
       _pwm_width_ms
@@ -244,6 +249,8 @@ void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
   }else{
     led(4, 0x000000);
   }
+
+  _ctrl_sec = _sec;
 }
 
 #if USE_BLYNK
@@ -320,7 +327,9 @@ void sendToCar()
 
 size_t sendToV(uint8_t *buffer, size_t size)
 {
-  return serial_ext.write(buffer, size);
+  size_t wsize = serial_ext.write(buffer, size);
+  //delay(1);
+  return wsize;
 }
 
 int readFromV(uint8_t *buffer, size_t size) {
@@ -384,7 +393,7 @@ void led(uint8_t num, uint32_t val) {
 
 void update_screen(){
   static unsigned long _prev_ms = 0;
-  if(200 < _ms - _prev_ms || _prev_ms == 0){
+  if(1000 < _ms - _prev_ms || _prev_ms == 0){
     // ok
   }else{
     return;
@@ -394,7 +403,7 @@ void update_screen(){
 
   M5.Lcd.setCursor(5, 130);
   M5.Lcd.setTextColor(WHITE, BLACK);
-  M5.Lcd.printf("%d", _ms);
+  M5.Lcd.printf("%02d:%02d:%02d", _sec/3600, _sec/60%60, _sec%60);
 
   M5.Lcd.setCursor(5, 140);
   M5.Lcd.setTextColor(ORANGE, BLACK);
@@ -404,16 +413,48 @@ void update_screen(){
   M5.Lcd.setTextColor(CYAN, BLACK);
   M5.Lcd.printf(" %.2f", _v_vbat/1000);
 
-  String s = " ";
-  if(wiimote_button_left ){ s += "< "; }else{ s += "  "; }
-  if(wiimote_button_right){ s += "> "; }else{ s += "  "; }
-  if(wiimote_button_1    ){ s += "1 "; }else{ s += "  "; }
-  if(wiimote_button_2    ){ s += "2 "; }else{ s += "  "; }
-  M5.Lcd.setCursor(5, 150);
-  M5.Lcd.setTextColor(BLACK, WHITE);
-  M5.Lcd.printf("%s", s.c_str());
+//  String s = " ";
+//  if(wiimote_button_left ){ s += "< "; }else{ s += "  "; }
+//  if(wiimote_button_right){ s += "> "; }else{ s += "  "; }
+//  if(wiimote_button_1    ){ s += "1 "; }else{ s += "  "; }
+//  if(wiimote_button_2    ){ s += "2 "; }else{ s += "  "; }
+//  M5.Lcd.setCursor(5, 150);
+//  M5.Lcd.setTextColor(BLACK, WHITE);
+//  M5.Lcd.printf("%s", s.c_str());
 
   _prev_ms = _ms;
+}
+
+void update_status()
+{
+  static int _prev_status = 0;
+  int status = 0;
+  if(60 < (_sec - _ctrl_sec)){
+    status = 1;
+  }
+  if(120 < (_sec - _ctrl_sec)){
+    status = 2;
+  }
+  if(M5.Axp.GetWarningLeve()){
+    status = 2;
+  }
+  if(_prev_status != status){
+    switch(status){
+    case 0:
+      M5.Axp.ScreenBreath(8);
+      led(7, 0);
+      break;
+    case 1:
+      M5.Axp.ScreenBreath(7);
+      led(7, 0x010000); // red
+      break;
+    case 2:
+      led(7, 0x000000); // LED off
+      M5.Axp.DeepSleep();
+      break;
+    }
+  }
+  _prev_status = status;
 }
 
 void debugLoopCount()
@@ -436,25 +477,46 @@ void led_ready(void)
   for(int i=0; i<3; i++){
     led(7, 0);
     led(0, 0x0f0f0f);
+    m5stickc_led(false);
     delay(50);
+
     led(7, 0);
     led(1, 0x0f0000);
+    m5stickc_led(true);
     delay(50);
+
     led(7, 0);
     led(2, 0x0f0f00);
+    m5stickc_led(false);
     delay(50);
+
     led(7, 0);
     led(3, 0x000f00);
+    m5stickc_led(true);
     delay(50);
+
     led(7, 0);
     led(4, 0x000f0f);
+    m5stickc_led(false);
     delay(50);
+
     led(7, 0);
     led(5, 0x00000f);
+    m5stickc_led(true);
     delay(50);
+
     led(7, 0);
     led(6, 0x0f000f);
+    m5stickc_led(false);
     delay(50);
   }
   led(7, 0);
+  m5stickc_led(false);
+}
+
+void m5stickc_led(bool on)
+{
+  static bool init = false;
+  if(!init){ pinMode(GPIO_NUM_10, OUTPUT); init = true; }
+  digitalWrite(GPIO_NUM_10, on ? LOW : HIGH);
 }

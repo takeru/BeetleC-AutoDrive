@@ -5,6 +5,7 @@ class Recorder:
         self.tmp_path = "/ramdisk/tmp.jpg"
         self.filename = filename
         self.bin_f = open(filename, "w")
+        self._write_jpeg_count = 0
 
     def close(self):
         self.bin_f.flush()
@@ -39,6 +40,7 @@ class Recorder:
         self.bin_f.flush()
         tmp_f.close()
         uos.remove(self.tmp_path)
+        self._write_jpeg_count += 1
 
     def write_number(self, key, value, length=4):
         self.bin_f.write(key+"\x00")
@@ -161,7 +163,7 @@ class App():
 
         fm.register(35, fm.fpioa.UART2_TX, force=True)
         fm.register(34, fm.fpioa.UART2_RX, force=True)
-        baud = 1500000 # 115200
+        baud = 115200 # 1500000
         self.uart = UART(UART.UART2, baud, 8, 0, 0, timeout=1000, read_buf_len=4096)
 
         sensor.reset()
@@ -180,41 +182,51 @@ class App():
 
         lcd.init(freq=40000000)
         lcd.direction(lcd.YX_RLDU)
-        lcd.clear(lcd.BLUE)
-        lcd.draw_string(20, 50, "BeetleC_AutoDrive_V", lcd.YELLOW, lcd.BLUE)
+        lcd.clear(lcd.BLACK)
+        lcd.draw_string(20, 50, "BeetleC_AutoDrive_V", lcd.CYAN, lcd.BLACK)
 
         self._rec               = None
         self._record_count      = 0
         self._loop_counter      = 0
         self._last_heartbeat_ms = 0
+        self._next_loop_cmd_ms  = 0
+        self._last_active_ms    = 0
 
     def loop(self):
-        self.open_recorder()
-        self.sendToC("loop v_loop=%d v_ms=%d\n" % (self._loop_counter, time.ticks_ms()))
-        while True:
-            line = self.readLineFromC()
-            if line and line[0] != 0:
-                try:
-                    line = line.decode('ascii').strip()
-                except UnicodeError as e:
-                    line = None
-            else:
-                line = None
-            if line == None:
-                break
-
-            s = "v_loop=%d v_ms=%d" % (self._loop_counter, time.ticks_ms())
-            s += " C=[%s]" % (line)
-            print(s)
-            time.sleep(0.001)
-            self._rec.write_string("s", s)
-
-        self.record()
-
-        if self._loop_counter % 100 == 99:
-            self.close_recorder()
-
         self.heartbeat()
+
+        self.open_recorder()
+
+        if self._next_loop_cmd_ms <= time.ticks_ms():
+            loop_cmd = "loop v_ms=%d v_records=%d v_loop=%d" % (time.ticks_ms(), self._record_count, self._loop_counter)
+            self.sendToC(loop_cmd + "\n")
+            self._next_loop_cmd_ms = time.ticks_ms() + 1000
+
+        line = self.readLineFromC()
+        tag = None
+        if line:
+            tag = line[0:line.find(" ")]
+            if (tag == "hb_c") or (tag == "ctrl"):
+                s = "v_ms=%d" % (time.ticks_ms())
+                s += " C=[%s]" % (line)
+                print("record:" + s)
+                self._rec.write_string(tag, s)
+            else:
+                #print("ignore:" + line)
+                pass
+
+        if tag == "ctrl":
+            if line.find("power=0 steering=0 left=0 right=0") == -1:
+                self._last_active_ms = time.ticks_ms()
+            is_active = (time.ticks_ms() - self._last_active_ms) < 5000
+            if is_active:
+                self.record()
+            else:
+                time.sleep(2.0)
+            self._next_loop_cmd_ms = 0
+
+        if 500 <= self._rec._write_jpeg_count:
+            self.close_recorder()
 
         self._loop_counter += 1
 
@@ -223,10 +235,10 @@ class App():
         uos.umount(self._randisk_mount_point)
 
     def heartbeat(self):
-        if 5000 < time.ticks_ms() - self._last_heartbeat_ms:
-            s = "hb " + self.system_status_string()
+        if 2000 < time.ticks_ms() - self._last_heartbeat_ms:
+            s = ("hb_v v_ms=%d v_records=%d v_loop=%d " % (time.ticks_ms(), self._record_count, self._loop_counter)) + self.system_status_string()
             self.sendToC(s + "\n")
-            print(s)
+            print("V: " + s)
             self._last_heartbeat_ms = time.ticks_ms()
 
     def set_lcd_brightness(self, brightness): # 0...15
@@ -236,15 +248,24 @@ class App():
     def sendToC(self, data):
         # data = bytearray([0x00,0x00,0x00,0x00,0x00])
         self.uart.write(data)
+        #time.sleep(0.001) # シリアルコンソールが文字化けする場合の対策sleep
 
     def readFromC(self, num):
         return self.uart.read(num)
 
     def readLineFromC(self):
-        return self.uart.readline()
+        line = self.uart.readline()
+        if line and line[0] != 0:
+            try:
+                line = line.decode('ascii').strip()
+            except UnicodeError as e:
+                line = None
+        else:
+            line = None
+        return line
 
     def record(self):
-        s = "%d %d %f" % (self._loop_counter, self._record_count, self._fps)
+        s = "%d %f" % (self._record_count, self._fps)
         lcd.draw_string(2, 2, ure.sub("(.+)/", "", self._rec.filename), lcd.WHITE, lcd.RED)
         lcd.draw_string(2, 20, s, lcd.WHITE, lcd.RED)
 
@@ -259,7 +280,6 @@ class App():
         filename = nextSeqFileName("/sd/m5stickv-record-%06d.bin")
         print("Open", filename)
         self._rec = Recorder(filename+".writing")
-        self._record_count = 0
 
     def close_recorder(self):
         if not hasattr(self, '_rec') or self._rec == None:
@@ -273,18 +293,29 @@ class App():
 
     def system_status_string(self):
         svfs = uos.statvfs("/sd/")
-        return "v_vbat=%.1f v_vusb=%.1f v_iusb=%.1f v_vex=%.1f v_iex=%.1f v_ichg=%.1f v_idcg=%.1f v_wbat=%.1f v_temp=%.1f v_blocks=%d v_bfree=%d" % (
+        return "v_vbat=%.1f v_temp=%.1f v_ichg=%.1f v_idcg=%.1f v_vusb=%.1f v_iusb=%.1f v_vaps=%.1f v_vex=%.1f v_iex=%.1f v_wbat=%.1f v_warn=%d v_blocks=%d v_bfree=%d" % (
             self._axp192.getVbatVoltage(),
-            self._axp192.getUSBVoltage(),
-            self._axp192.getUSBInputCurrent(),
-            self._axp192.getConnextVoltage(),
-            self._axp192.getConnextInputCurrent(),
+            self._axp192.getTemperature(),
             self._axp192.getBatteryChargeCurrent(),
             self._axp192.getBatteryDischargeCurrent(),
+            self._axp192.getUSBVoltage(),
+            self._axp192.getUSBInputCurrent(),
+            self._axp192_getApsVoltage(),
+            self._axp192.getConnextVoltage(),
+            self._axp192.getConnextInputCurrent(),
             self._axp192.getBatteryInstantWatts(),
-            self._axp192.getTemperature(),
+            self._axp192_getWarningLeve(),
             svfs[2],
             svfs[3]
         )
+
+    def _axp192_getApsVoltage(self):
+        lsb = self._axp192.__readReg(0x7E)
+        msb = self._axp192.__readReg(0x7F)
+        return ((lsb << 4) + msb) * 1.4
+
+    def _axp192_getWarningLeve(self):
+        v = self._axp192.__readReg(0x47)
+        return v & 0x01
 
 App().main()
