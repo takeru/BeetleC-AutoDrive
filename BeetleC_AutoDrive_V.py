@@ -156,14 +156,28 @@ class App():
                 self.loop()
         finally:
             self.cleanup()
+            self.set_lcd_brightness(7)
+            #lcd.clear(lcd.BLACK)
+            #lcd.draw_string(10, 10, "BeetleC_AutoDrive_V", lcd.RED, lcd.BLACK)
 
     def setup(self):
+        self._rec               = None
+        self._record_count      = 0
+        self._loop_counter      = 0
+        self._last_100ms_cnt    = 0
+        self._next_loop_cmd_ms  = 0
+        self._last_active_ms    = 0
+        self._lcd_brightness    = None
+        self._charge_mode       = None
+
         self._axp192 = pmu.axp192()
-        self.set_lcd_brightness(7)
+        self._axp192.enableADCs(True)
+        self._axp192.enableCoulombCounter(False)
+        self.set_lcd_brightness(9)
 
         fm.register(35, fm.fpioa.UART2_TX, force=True)
         fm.register(34, fm.fpioa.UART2_RX, force=True)
-        baud = 115200 # 1500000
+        baud = 1500000 # 115200 1500000 3000000 4500000
         self.uart = UART(UART.UART2, baud, 8, 0, 0, timeout=1000, read_buf_len=4096)
 
         sensor.reset()
@@ -183,18 +197,9 @@ class App():
         lcd.init(freq=40000000)
         lcd.direction(lcd.YX_RLDU)
         lcd.clear(lcd.BLACK)
-        lcd.draw_string(20, 50, "BeetleC_AutoDrive_V", lcd.CYAN, lcd.BLACK)
-
-        self._rec               = None
-        self._record_count      = 0
-        self._loop_counter      = 0
-        self._last_heartbeat_ms = 0
-        self._next_loop_cmd_ms  = 0
-        self._last_active_ms    = 0
+        lcd.draw_string(10, 10, "BeetleC_AutoDrive_V", lcd.CYAN, lcd.BLACK)
 
     def loop(self):
-        self.heartbeat()
-
         self.open_recorder()
 
         if self._next_loop_cmd_ms <= time.ticks_ms():
@@ -216,34 +221,75 @@ class App():
                 pass
 
         if tag == "ctrl":
-            if line.find("power=0 steering=0 left=0 right=0") == -1:
+            m = ure.search("power=(-?\d+) steering=(-?\d+) left=(-?\d+) right=(-?\d+)", line)
+            if m and (int(m.group(1)) != 0 or int(m.group(2)) != 0 or int(m.group(3)) != 0 or int(m.group(4)) != 0):
                 self._last_active_ms = time.ticks_ms()
-            is_active = (time.ticks_ms() - self._last_active_ms) < 5000
-            if is_active:
+            if (time.ticks_ms() - self._last_active_ms) < 3000:
                 self.record()
+                self._next_loop_cmd_ms = 0
             else:
-                time.sleep(2.0)
-            self._next_loop_cmd_ms = 0
+                self._next_loop_cmd_ms = time.ticks_ms() + 1000
 
-        if 500 <= self._rec._write_jpeg_count:
-            self.close_recorder()
-
+        self.sometimes_do()
         self._loop_counter += 1
 
     def cleanup(self):
         self.close_recorder()
         uos.umount(self._randisk_mount_point)
 
-    def heartbeat(self):
-        if 2000 < time.ticks_ms() - self._last_heartbeat_ms:
+    def sometimes_do(self):
+        cnt = int(time.ticks_ms() / 100)
+        if cnt <= self._last_100ms_cnt:
+            return
+        self._last_100ms_cnt = cnt
+
+        if cnt % 10 == 0: # every 1sec.
+            if (time.ticks_ms() - self._last_active_ms) < 5000:
+                self.set_lcd_brightness(9)
+                self.set_charge_mode("on")
+            else:
+                self.set_lcd_brightness(7)
+
+            if 1 <= self._rec._write_jpeg_count and 20000 < (time.ticks_ms() - self._last_active_ms):
+                self.close_recorder()
+
+        if cnt % 20 == 0: # every 2sec. heartbeat
             s = ("hb_v v_ms=%d v_records=%d v_loop=%d " % (time.ticks_ms(), self._record_count, self._loop_counter)) + self.system_status_string()
             self.sendToC(s + "\n")
             print("V: " + s)
             self._last_heartbeat_ms = time.ticks_ms()
 
+
+        if False: # debug
+            s = ""
+            for addr in [0x28, 0x12, 0x91, 0x33, 0x34, 0x01, 0x7A, 0x7B]:
+              value = self._axp192.__readReg(addr)
+              s += 'REG{:02X}H=0x{:02X} ({:08b}) '.format(addr, value, value)
+            print(s)
+            r7a = self._axp192.__readReg(0x7A) # 8bit
+            r7b = self._axp192.__readReg(0x7B) # 5bit
+            ichg = (r7a << 5 | (r7b & 0x1F)) * 0.5
+            print("ichg=%.3f" % ichg)
+
+
+        if cnt % 60 == 0: # every 6sec.
+            if 5000 < (time.ticks_ms() - self._last_active_ms):
+                if self._axp192.getVbatVoltage() < 4100:
+                    if self._charge_mode == "fast":
+                        if self._axp192.getBatteryChargeCurrent() < 15:
+                            self.set_charge_mode("off")
+                        else:
+                            self.set_charge_mode("fast")
+                    else:
+                        self.set_charge_mode("fast")
+                else:
+                    self.set_charge_mode("on")
+
     def set_lcd_brightness(self, brightness): # 0...15
         #self._axp192.setScreenBrightness(brightness)
-        self._axp192.__writeReg(0x91, brightness << 4)
+        if self._lcd_brightness != brightness:
+            self._axp192.__writeReg(0x91, brightness << 4)
+            self._lcd_brightness = brightness
 
     def sendToC(self, data):
         # data = bytearray([0x00,0x00,0x00,0x00,0x00])
@@ -265,9 +311,9 @@ class App():
         return line
 
     def record(self):
-        s = "%d %f" % (self._record_count, self._fps)
-        lcd.draw_string(2, 2, ure.sub("(.+)/", "", self._rec.filename), lcd.WHITE, lcd.RED)
-        lcd.draw_string(2, 20, s, lcd.WHITE, lcd.RED)
+        s = "rec=%d fps=%.2f" % (self._record_count, self._fps)
+        lcd.draw_string(10, 50, ure.sub("(.+)/", "", self._rec.filename), lcd.WHITE, lcd.BLACK)
+        lcd.draw_string(10, 70, s, lcd.WHITE, lcd.BLACK)
 
         self._rec.write_number("v_ms", time.ticks_ms(), 4)
         img = sensor.snapshot()
@@ -317,5 +363,23 @@ class App():
     def _axp192_getWarningLeve(self):
         v = self._axp192.__readReg(0x47)
         return v & 0x01
+
+    def set_charge_mode(self, mode):
+        if self._charge_mode == mode:
+            return
+        reg0x33 = self._axp192.__readReg(0x33)
+        if mode == "fast":
+            reg0x33 |= (1<<7) # ON
+            reg0x33 = (reg0x33 & 0xF0) | 0x01 # 190mA
+        elif mode == "on":
+            reg0x33 |= (1<<7) # ON
+            reg0x33 = (reg0x33 & 0xF0) | 0x00 # 100mA
+        elif mode == "off":
+            reg0x33 &= ~(1<<7) # OFF
+            reg0x33 = (reg0x33 & 0xF0) | 0x00 # 100mA
+        self._axp192.__writeReg(0x33, reg0x33)
+        self._charge_mode = mode
+        #reg0x33 = self.axp192.__readReg(0x33)
+        #print("reg0x33=%02X" % (reg0x33))
 
 App().main()

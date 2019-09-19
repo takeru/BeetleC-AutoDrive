@@ -37,6 +37,7 @@ HardwareSerial serial_ext(2); // Serial from/to V via GROVE
 
 double _c_vbat = 0;
 double _v_vbat = 0;
+double _c_vusb = 0;
 
 bool wiimote_button_down  = false;
 bool wiimote_button_up    = false;
@@ -54,7 +55,7 @@ void setup()
 {
   M5.begin();
   //Serial.begin(115200);
-  Serial.setTimeout(1);
+  Serial.setTimeout(100);
 
 #if USE_BLYNK
   Blynk.setDeviceName("BeetleC-AutoDrive");
@@ -64,9 +65,9 @@ void setup()
   Wiimote::register_callback(1, wiimote_callback);
 
   // M5StickV
-  int baud = 115200; //1500000; // 115200 1500000 3000000 4500000
+  int baud = 1500000; // 115200 1500000 3000000 4500000
   serial_ext.begin(baud, SERIAL_8N1, 32, 33);
-  serial_ext.setTimeout(1);
+  serial_ext.setTimeout(100);
 
   // LCD
   M5.Axp.ScreenBreath(8);
@@ -147,6 +148,7 @@ void heartbeat(void)
     double c_ichg  = M5.Axp.GetIchargeData() * 0.5;
     double c_idchg = M5.Axp.GetIdischargeData() * 0.5;
     double c_vusb  = M5.Axp.GetVusbinData() * 1.7;
+    _c_vusb = c_vusb;
     double c_iusb  = M5.Axp.GetIusbinData() * 0.375;
     double c_vaps  = M5.Axp.GetVapsData() *1.4;
     double c_vex   = M5.Axp.GetVinData() * 1.7;
@@ -449,8 +451,13 @@ void update_status()
       led(7, 0x010000); // red
       break;
     case 2:
-      led(7, 0x000000); // LED off
-      M5.Axp.DeepSleep();
+      if(_c_vusb < 4.0){
+        led(7, 0x000000); // LED off
+        M5.Axp.DeepSleep();
+      }else{
+        M5.Axp.ScreenBreath(7);
+        led(7, 0x000001); // blue
+      }
       break;
     }
   }
