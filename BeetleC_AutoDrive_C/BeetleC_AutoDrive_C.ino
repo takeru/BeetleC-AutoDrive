@@ -55,7 +55,7 @@ void setup()
 {
   M5.begin();
   //Serial.begin(115200);
-  Serial.setTimeout(100);
+  Serial.setTimeout(1);
 
 #if USE_BLYNK
   Blynk.setDeviceName("BeetleC-AutoDrive");
@@ -67,7 +67,7 @@ void setup()
   // M5StickV
   int baud = 1500000; // 115200 1500000 3000000 4500000
   serial_ext.begin(baud, SERIAL_8N1, 32, 33);
-  serial_ext.setTimeout(100);
+  serial_ext.setTimeout(1);
 
   // LCD
   M5.Axp.ScreenBreath(8);
@@ -429,7 +429,26 @@ void update_screen(){
 
 void update_status()
 {
+  static unsigned long _prev_ms = 0;
+  if(1000 < _ms - _prev_ms || _prev_ms == 0){
+    // ok
+  }else{
+    return;
+  }
+
   static int _prev_status = 0;
+
+  if(4000.0 <= _c_vusb){
+    _ctrl_sec = _sec;
+    if(_sec % 2 == 0){
+      led(7, 0x010100); // yellow
+    }else{
+      led(7, 0x000000); // off
+    }
+  }else{
+    led(7, 0x000000); // off
+  }
+
   int status = 0;
   if(60 < (_sec - _ctrl_sec)){
     status = 1;
@@ -451,13 +470,8 @@ void update_status()
       led(7, 0x010000); // red
       break;
     case 2:
-      if(_c_vusb < 4.0){
-        led(7, 0x000000); // LED off
-        M5.Axp.DeepSleep();
-      }else{
-        M5.Axp.ScreenBreath(7);
-        led(7, 0x000001); // blue
-      }
+      led(7, 0x000000); // LED off
+      M5.Axp.DeepSleep();
       break;
     }
   }

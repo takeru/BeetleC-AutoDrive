@@ -81,63 +81,6 @@ def initRamdisk(path):
     vfs.mkfs(vfs)
     uos.mount(vfs, path)
 
-def nextSeqFileName(format):
-    maxnum_filename = format % (0) + ".max"
-    try:
-        with open(maxnum_filename) as f:
-            maxnum = int(f.read().strip())
-    except:
-        maxnum = 0
-
-    for n in range(maxnum+1, 999999):
-        filename = format % (n)
-        try:
-            stat = uos.stat(filename)
-        except OSError as e:
-            with open(maxnum_filename, "w") as f:
-                f.write("%d" % (n))
-            return filename
-    return None
-
-# ------------------------------------------------------
-import sensor, time, pmu
-
-class TestApp:
-    def setup(self):
-        sensor.reset()
-        sensor.set_pixformat(sensor.RGB565)
-        sensor.set_framesize(sensor.QVGA)
-        sensor.run(1)
-
-        ramdisk_path = "/ramdisk"
-        try:
-            stat = uos.stat(ramdisk_path)
-            # print("ramdisk_path=", ramdisk_path, " stat=", stat)
-        except OSError as e:
-            initRamdisk(ramdisk_path)
-
-    def run(self):
-        seq = 0
-        for x in range(100):
-            filename = nextSeqFileName("/sd/recorder_example%06d.bin")
-            print("filename=", filename)
-            rec = Recorder(filename+".working")
-            clock = time.clock()
-            for i in range(100):
-                clock.tick()
-                rec.write_number("seq", seq, 4)
-                seq += 1
-                img = sensor.snapshot()
-                rec.write_jpeg_image(img)
-                print("i=", i, " fps=", clock.fps())
-            rec.close()
-            uos.rename(filename+".working", filename)
-            print(filename, uos.stat(filename))
-
-#app = TestApp()
-#app.setup()
-#app.run()
-
 #***************************************************************************************************
 
 import sensor, image, time, pmu, ure, uos, lcd
@@ -169,6 +112,7 @@ class App():
         self._last_active_ms    = 0
         self._lcd_brightness    = None
         self._charge_mode       = None
+        self._timestamp         = None
 
         self._axp192 = pmu.axp192()
         self._axp192.enableADCs(True)
@@ -212,10 +156,11 @@ class App():
         if line:
             tag = line[0:line.find(" ")]
             if (tag == "hb_c") or (tag == "ctrl"):
-                s = "v_ms=%d" % (time.ticks_ms())
-                s += " C=[%s]" % (line)
-                print("record:" + s)
-                self._rec.write_string(tag, s)
+                if self._rec:
+                    s = "v_ms=%d" % (time.ticks_ms())
+                    s += " C=[%s]" % (line)
+                    print("record:" + s)
+                    self._rec.write_string(tag, s)
             else:
                 #print("ignore:" + line)
                 pass
@@ -225,10 +170,16 @@ class App():
             if m and (int(m.group(1)) != 0 or int(m.group(2)) != 0 or int(m.group(3)) != 0 or int(m.group(4)) != 0):
                 self._last_active_ms = time.ticks_ms()
             if (time.ticks_ms() - self._last_active_ms) < 3000:
-                self.record()
+                if self._rec:
+                    self.record()
                 self._next_loop_cmd_ms = 0
             else:
                 self._next_loop_cmd_ms = time.ticks_ms() + 1000
+
+        if tag == "hb_c":
+            m = ure.search("rtc=(\d+)-(\d+)-(\d+)_(\d+):(\d+):(\d+)", line)
+            if m:
+                self._timestamp = m.group(1) + m.group(2) + m.group(3) + "_" + m.group(4) + m.group(5) + m.group(6)
 
         self.sometimes_do()
         self._loop_counter += 1
@@ -250,7 +201,7 @@ class App():
             else:
                 self.set_lcd_brightness(7)
 
-            if 1 <= self._rec._write_jpeg_count and 20000 < (time.ticks_ms() - self._last_active_ms):
+            if self._rec and 1 <= self._rec._write_jpeg_count and 20000 < (time.ticks_ms() - self._last_active_ms):
                 self.close_recorder()
 
         if cnt % 20 == 0: # every 2sec. heartbeat
@@ -321,14 +272,15 @@ class App():
         self._record_count += 1
 
     def open_recorder(self):
-        if hasattr(self, '_rec') and self._rec != None:
+        if self._rec != None:
             return
-        filename = nextSeqFileName("/sd/m5stickv-record-%06d.bin")
-        print("Open", filename)
-        self._rec = Recorder(filename+".writing")
+        if self._timestamp:
+            filename = "/sd/record-"+self._timestamp+".bin"
+            print("Open", filename)
+            self._rec = Recorder(filename+".writing")
 
     def close_recorder(self):
-        if not hasattr(self, '_rec') or self._rec == None:
+        if self._rec == None:
             return
         filename = ure.sub("\.writing$", "", self._rec.filename)
         uos.rename(self._rec.filename, filename)
