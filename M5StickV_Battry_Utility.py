@@ -20,23 +20,22 @@ class App():
         lcd.direction(lcd.YX_RLDU)
 
         self.counter = 0
-        self.axp192 = pmu.axp192()
+        self._axp192 = pmu.axp192()
 
-        self.axp192.enableADCs(True)
-        self.axp192.enableCoulombCounter(True)
+        self._axp192.enableADCs(True)
+        self._axp192.enableCoulombCounter(False)
 
         self.printRegs()
 
         # LCDの明るさ
-        self.axp192.__writeReg(0x91, 0x70) # 上位4bit 7から15
-        # self.axp192.setScreenBrightness(7) # <- 0x28じゃなくて0x91が正しい https://github.com/sipeed/MaixPy/pull/153
+        self._axp192.__writeReg(0x91, 0xA0) # 上位4bit 7から15
+        # self._axp192.setScreenBrightness(7) # <- 0x28じゃなくて0x91が正しい https://github.com/sipeed/MaixPy/pull/153
 
         # バッテリ充電ON/OFF https://twitter.com/michan06/status/1168104180445106180
-        reg0x33 = self.axp192.__readReg(0x33)
+        reg0x33 = self._axp192.__readReg(0x33)
         reg0x33 |= (1<<7) # ON
         #reg0x33 &= ~(1<<7) # OFF
-        self.axp192.__writeReg(0x33, reg0x33)
-
+        self._axp192.__writeReg(0x33, reg0x33)
 
 
         # REG 33H：充電制御1
@@ -58,9 +57,9 @@ class App():
         #           1100：1080 mA;  1101：1160 mA;  1110：1240 mA;  1111：1320 mA;
 
         # 0xC0(0b11000000) なら「充電オン、充電目標電圧=4.2V、充電終了電流=10%、充電電流=100mA」
-        reg0x33 = self.axp192.__readReg(0x33)
+        reg0x33 = self._axp192.__readReg(0x33)
         reg0x33 = (reg0x33 & 0xF0) | 0x01 # 190mA
-        self.axp192.__writeReg(0x33, reg0x33)
+        self._axp192.__writeReg(0x33, reg0x33)
 
         # REG 34H：充電制御2
         # デフォルト：41H
@@ -86,72 +85,108 @@ class App():
         # bit1    AXP192スイッチモード表示   0：モードA; 1：モードB
         # bit0    予約済み、変更不可
 
-        self.axp192.setK210Vcore(0.8)
+        self._axp192.setK210Vcore(0.8)
 
     def loop(self):
         self.printRegs()
 
         self.counter += 1
-        print("counter=%04d vbat=%6.1fmV USB=%6.1fmV,%5.1fmA EX=%6.1fmV,%5.1fmA Bat=+%5.1fmA,-%5.1fmA,%5.1fmW %4.1fC" % (
+        s = "counter=%d v_vbat=%.1f v_temp=%.1f v_ichg=%.1f v_idcg=%.1f v_vusb=%.1f v_iusb=%.1f v_vaps=%.1f v_vex=%.1f v_iex=%.1f v_wbat=%.1f v_warn=%d" % (
             self.counter,
-            self.axp192.getVbatVoltage(),
-            self.axp192.getUSBVoltage(),
-            self.axp192.getUSBInputCurrent(),
-            self.axp192.getConnextVoltage(),
-            self.axp192.getConnextInputCurrent(),
-            self.axp192.getBatteryChargeCurrent(),
-            self.axp192.getBatteryDischargeCurrent(),
-            self.axp192.getBatteryInstantWatts(),
-            self.axp192.getTemperature()
-        ))
+            self._axp192.getVbatVoltage(),
+            self._axp192.getTemperature(),
+            self._axp192.getBatteryChargeCurrent(),
+            self._axp192.getBatteryDischargeCurrent(),
+            self._axp192.getUSBVoltage(),
+            self._axp192.getUSBInputCurrent(),
+            self._axp192_getApsVoltage(),
+            self._axp192.getConnextVoltage(),
+            self._axp192.getConnextInputCurrent(),
+            self._axp192.getBatteryInstantWatts(),
+            self._axp192_getWarningLeve(),
+        )
+        print(s)
 
         lcd.clear(lcd.BLACK)
-        lcd.draw_string(2,  5, "hello maixpy %d" % (self.counter), lcd.WHITE, lcd.RED)
-        lcd.draw_string(2, 20, "vbat=%.1fmV" % (self.axp192.getVbatVoltage()), lcd.WHITE, lcd.BLUE)
-        lcd.draw_string(2, 35, "USB=%.1fmV,%.1fmA" % (self.axp192.getUSBVoltage(), self.axp192.getUSBInputCurrent()), lcd.GREEN, lcd.BLACK)
-        lcd.draw_string(2, 50, "EX=%.1fmV,%.1fmA" % (self.axp192.getConnextVoltage(), self.axp192.getConnextInputCurrent()), lcd.WHITE, lcd.BLACK)
-        lcd.draw_string(2, 65, "Bat=+%.1fmA,-%.1fmA,%.1fmW" % (
-            self.axp192.getBatteryChargeCurrent(),
-            self.axp192.getBatteryDischargeCurrent(),
-            self.axp192.getBatteryInstantWatts()),
-            lcd.BLACK, lcd.YELLOW)
-        lcd.draw_string(2, 80, "%.1fC" % (self.axp192.getTemperature()), lcd.RED, lcd.WHITE)
+        lcd.draw_string(2,  5, "M5StickV Battry Utility %d" % (self.counter), lcd.CYAN, lcd.BLACK)
+
+        temp = self._axp192.getTemperature()
+        if 40.0 < temp:
+            colors = (lcd.YELLOW, lcd.RED, "Hot!!")
+        else:
+            colors = (lcd.WHITE, lcd.BLACK, "")
+        lcd.draw_string(20, 27, "Temp: %.1fC %s" % (temp, colors[2]), colors[0], colors[1])
+
+        vbat = self._axp192.getVbatVoltage()
+        if vbat < 3700:
+            colors = (lcd.WHITE, lcd.RED, "[*____] LOW")
+        elif vbat < 3800:
+            colors = (lcd.RED, lcd.BLACK, "[**___]")
+        elif vbat < 3900:
+            colors = (lcd.ORANGE, lcd.BLACK, "[***__]")
+        elif vbat < 4000:
+            colors = (lcd.YELLOW, lcd.BLACK, "[****_]")
+        else:
+            colors = (lcd.GREEN, lcd.BLACK, "[*****] FULL")
+        lcd.draw_string(20, 45, "VBat: %.1fmV %s" % (vbat, colors[2]), colors[0], colors[1])
+
+        ichg = self._axp192.getBatteryChargeCurrent()
+        if ichg < 1:
+            colors = (lcd.DARKGREY, lcd.BLACK, "[___]")
+        elif ichg < 15:
+            colors = (lcd.WHITE, lcd.BLACK, "[>__]")
+        elif ichg < 100:
+            colors = (lcd.YELLOW, lcd.BLACK, "[>>_]")
+        else:
+            colors = (lcd.GREEN, lcd.BLACK, "[>>>]")
+        lcd.draw_string(20, 63, "IChg: %.1fmA %s" % (ichg, colors[2]), colors[0], colors[1])
+
+
+
+        lcd.draw_string(20, 100, "IDcg: %.1fmA" % (self._axp192.getBatteryDischargeCurrent()), lcd.WHITE, lcd.BLACK)
+        lcd.draw_string(20, 115, "USB : %.1fmV, %.1fmA" % (self._axp192.getUSBVoltage(), self._axp192.getUSBInputCurrent()), lcd.WHITE, lcd.BLACK)
+
+        #lcd.draw_string(2, 50, "EX=%.1fmV,%.1fmA" % (self._axp192.getConnextVoltage(), self._axp192.getConnextInputCurrent()), lcd.WHITE, lcd.BLACK)
         time.sleep(5)
 
-        if self.counter % 5 == 0 and self.axp192.getBatteryChargeCurrent() < 15.0:
+        if self.counter % 5 == 0 and self._axp192.getBatteryChargeCurrent() < 15.0:
             self.resetCharge()
 
-        # VBatの計算あってる？
-        #reg0x78 = self.axp192.__readReg(0x78)
-        #reg0x79 = self.axp192.__readReg(0x79)
-        #print("reg0x78=%02X reg0x79=%02X" % (reg0x78, reg0x79))
-        #vbat = (reg0x78 << 4) + reg0x79
-        #print(vbat, vbat*1.1)
+        print("")
 
     def printRegs(self):
-        s = ""
-        for addr in [0x28, 0x12, 0x91, 0x33, 0x34, 0x01]:
-          value = self.axp192.__readReg(addr)
-          s += 'REG{:02X}H=0x{:02X} ({:08b}) '.format(addr, value, value)
+        s = "Reg: "
+        for addr in [0x28, 0x12, 0x91, 0x33, 0x34, 0x00, 0x01]:
+          value = self._axp192.__readReg(addr)
+          s += '{:02X}H={:02X}({:08b}) '.format(addr, value, value)
         print(s)
 
     def resetCharge(self):
         print("*** resetCharge ***")
-        reg0x33 = self.axp192.__readReg(0x33)
+        reg0x33 = self._axp192.__readReg(0x33)
         reg0x33 = (reg0x33 & 0xF0) | 0x01 # 200mA
         reg0x33 &= ~(1<<7) # OFF
-        self.axp192.__writeReg(0x33, reg0x33)
+        self._axp192.__writeReg(0x33, reg0x33)
 
-        reg0x33 = self.axp192.__readReg(0x33)
-        print("reg0x33=%02X" % (reg0x33))
+        reg0x33 = self._axp192.__readReg(0x33)
+        #print("reg0x33=%02X" % (reg0x33))
 
         time.sleep(1)
 
-        reg0x33 = self.axp192.__readReg(0x33)
+        reg0x33 = self._axp192.__readReg(0x33)
         reg0x33 |= (1<<7) # ON
-        self.axp192.__writeReg(0x33, reg0x33)
+        self._axp192.__writeReg(0x33, reg0x33)
 
-        reg0x33 = self.axp192.__readReg(0x33)
-        print("reg0x33=%02X" % (reg0x33))
+        reg0x33 = self._axp192.__readReg(0x33)
+        #print("reg0x33=%02X" % (reg0x33))
+
+    def _axp192_getApsVoltage(self):
+        lsb = self._axp192.__readReg(0x7E)
+        msb = self._axp192.__readReg(0x7F)
+        return ((lsb << 4) + msb) * 1.4
+
+    def _axp192_getWarningLeve(self):
+        v = self._axp192.__readReg(0x47)
+        return v & 0x01
 
 App().main()
