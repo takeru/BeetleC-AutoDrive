@@ -134,11 +134,11 @@ class App():
         if ichg < 1:
             colors = (lcd.DARKGREY, lcd.BLACK, "[___]")
         elif ichg < 15:
-            colors = (lcd.WHITE, lcd.BLACK, "[>__]")
+            colors = (lcd.YELLOW, lcd.BLACK, "[>__]")
         elif ichg < 100:
-            colors = (lcd.YELLOW, lcd.BLACK, "[>>_]")
+            colors = (lcd.ORANGE, lcd.BLACK, "[>>_]")
         else:
-            colors = (lcd.GREEN, lcd.BLACK, "[>>>]")
+            colors = (lcd.ORANGE, lcd.BLUE, "[>>>]")
         lcd.draw_string(20, 63, "IChg: %.1fmA %s" % (ichg, colors[2]), colors[0], colors[1])
 
 

@@ -33,6 +33,13 @@ signed int _car_left       = 1;
 signed int _car_right      = 1;
 signed int _output_left    = 0;
 signed int _output_right   = 0;
+
+unsigned long _auto_ms     = 0;
+//double _auto_left          = 0.0;
+//double _auto_right         = 0.0;
+double _auto_power         = 0.0;
+double _auto_steering      = 0.0;
+
 HardwareSerial serial_ext(2); // Serial from/to V via GROVE
 
 double _c_vbat = 0;
@@ -113,6 +120,7 @@ void loop()
     }
 
     if(strncmp(s.c_str(), "hb_v ", 5)==0){
+      _v_vbat = 0.0;
       char* c0 = strstr(s.c_str(), "v_vbat=");
       if(c0 != NULL){
         c0 += 7;
@@ -124,6 +132,16 @@ void loop()
           _v_vbat = atof(buf);
         }
       }
+    }
+
+    if(strncmp(s.c_str(), "auto ", 5)==0){
+      _auto_ms = _ms;
+      _auto_power    = atof(extract_value(s, "power").c_str());
+      _auto_steering = atof(extract_value(s, "steering").c_str());
+      Serial.printf("auto_power=%.2f auto_steering=%.2f\n", _auto_power, _auto_steering);
+      //_auto_left  = atof(extract_value(s, "left").c_str());
+      //_auto_right = atof(extract_value(s, "right").c_str());
+      //Serial.printf("auto_left=%.2f auto_right=%.2f\n", _auto_left, _auto_right);
     }
   }
 
@@ -137,6 +155,22 @@ void loop()
   update_status();
 }
 
+
+String extract_value(String s, char* key)
+{
+  char* c0 = strstr(s.c_str(), (String(key)+"=").c_str());
+  if(c0 != NULL){
+    c0 += String(key).length()+1;
+    char* c1 = strstr(c0, " ");
+    if(c1 != NULL){
+      char buf[16];
+      strncpy(buf, c0, c1-c0);
+      buf[c1-c0] = 0;
+      return String(buf);
+    }
+  }
+  return String("");
+}
 
 void heartbeat(void)
 {
@@ -185,29 +219,31 @@ void wiimote_control(void)
   unsigned long tick = (_ms / 50);
   if(last_tick < tick){
     if(wiimote_button_2){
-      _power += 2;
+      _power += 1;
     }
     if(wiimote_button_1){
-      _power -= 2;
+      _power -= 1;
     }
     if((!wiimote_button_2) && (!wiimote_button_1)){
       _power *= 0.90;
     }
 
     if(wiimote_button_left){
-      _steering += 5;
+      _steering += 3;
     }
     if(wiimote_button_right){
-      _steering -= 5;
+      _steering -= 3;
     }
     if((!wiimote_button_left) && (!wiimote_button_right)){
       _steering *= 0.80;
     }
 
-    if(_power    < -100     ){ _power    = -100; }
-    if(100       < _power   ){ _power    =  100; }
-    if(_steering < -100     ){ _steering = -100; }
-    if(100       < _steering){ _steering =  100; }
+    #define WIIMOTE_POWER_MAX    60
+    #define WIIMOTE_STEERING_MAX 60
+    if(_power    < -WIIMOTE_POWER_MAX        ){ _power    = -WIIMOTE_POWER_MAX;    }
+    if(WIIMOTE_POWER_MAX       < _power      ){ _power    =  WIIMOTE_POWER_MAX;    }
+    if(_steering < -WIIMOTE_STEERING_MAX     ){ _steering = -WIIMOTE_STEERING_MAX; }
+    if(WIIMOTE_STEERING_MAX       < _steering){ _steering =  WIIMOTE_STEERING_MAX; }
 
     last_tick = tick;
   }
@@ -288,16 +324,24 @@ BLYNK_WRITE(V13) // pwm_width_ms(1..500)
 void sendToCar()
 {
   // steer by rate
-  //signed int power = _power    * 0.3;
-  //signed int steer = _steering * 0.7;
-  //signed int left  = power * (100 - steer) / 100;
-  //signed int right = power * (100 + steer) / 100;
+  //signed int power    = _power    * 0.3;
+  //signed int steering = _steering * 0.7;
+  //signed int left     = power * (100 - steer) / 100;
+  //signed int right    = power * (100 + steer) / 100;
 
   // steer by abs
-  signed int power = _power    * _power_rate    / 100;
-  signed int steer = _steering * _steering_rate / 100;
-  signed int left  = power - steer;
-  signed int right = power + steer;
+  signed int power    = _power    * _power_rate    / 100;
+  signed int steering = _steering * _steering_rate / 100;
+  if(_ms - _auto_ms < 200){
+    power    = _auto_power;
+    steering = _auto_steering;
+  }
+  signed int left  = power - steering;
+  signed int right = power + steering;
+//  if(_ms - _auto_ms < 200){
+//    left  = _auto_left;
+//    right = _auto_right;
+//  }
   _output_left  = left;
   _output_right = right;
 
@@ -438,15 +482,39 @@ void update_status()
 
   static int _prev_status = 0;
 
-  if(4000.0 <= _c_vusb){
-    _ctrl_sec = _sec;
+  if(4000.0 <= _c_vusb || 5 < (_sec - _ctrl_sec)){
     if(_sec % 2 == 0){
-      led(7, 0x010100); // yellow
+      if(4100 < _c_vbat){
+        led(3, 0x000001); // blue
+      }else if(3950 < _c_vbat){
+        led(3, 0x000100); // green
+      }else if(3800 < _c_vbat){
+        led(3, 0x010100); // yellow
+      }else if(3650 < _c_vbat){
+        led(3, 0x020100); // orange
+      }else{
+        led(3, 0x020000); // red
+      }
+      if(4100 < _v_vbat){
+        led(0, 0x000001); // blue
+      }else if(3950 < _v_vbat){
+        led(0, 0x000100); // green
+      }else if(3800 < _v_vbat){
+        led(0, 0x010100); // yellow
+      }else if(3650 < _v_vbat){
+        led(0, 0x020100); // orange
+      }else{
+        led(0, 0x020000); // red
+      }
     }else{
       led(7, 0x000000); // off
     }
   }else{
     led(7, 0x000000); // off
+  }
+
+  if(4000.0 <= _c_vusb){
+    _ctrl_sec = _sec;
   }
 
   int status = 0;

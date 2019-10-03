@@ -83,10 +83,11 @@ def initRamdisk(path):
 
 #***************************************************************************************************
 
-import sensor, image, time, pmu, ure, uos, lcd
+import sensor, image, time, pmu, ure, uos, lcd, gc
 #import recorder
 from fpioa_manager import fm
 from machine import UART
+import KPU as kpu
 
 class App():
     def main(self):
@@ -113,6 +114,9 @@ class App():
         self._lcd_brightness    = None
         self._charge_mode       = None
         self._timestamp         = None
+        self._ramdisk_mount_point = "/ramdisk"
+        self._mode              = "rec"
+        #self._mode              = "auto"
 
         self._axp192 = pmu.axp192()
         self._axp192.enableADCs(True)
@@ -127,23 +131,32 @@ class App():
         sensor.reset()
         sensor.set_pixformat(sensor.RGB565)
         sensor.set_framesize(sensor.QVGA)
+        sensor.set_vflip(1)
+        sensor.set_hmirror(1)
+        #sensor.set_windowing((224, 224))
         sensor.run(1)
 
-        self._randisk_mount_point = "/ramdisk"
         try:
-            stat = uos.stat(self._randisk_mount_point)
-            uos.umount(self._randisk_mount_point)
+            stat = uos.stat(self._ramdisk_mount_point)
+            uos.umount(self._ramdisk_mount_point)
             # print("mount_point=", mount_point, " stat=", stat)
         except OSError as e:
             pass
-        initRamdisk(self._randisk_mount_point)
+        initRamdisk(self._ramdisk_mount_point)
 
         lcd.init(freq=40000000)
         lcd.direction(lcd.YX_RLDU)
         lcd.clear(lcd.BLACK)
         lcd.draw_string(10, 10, "BeetleC_AutoDrive_V", lcd.CYAN, lcd.BLACK)
 
+        if self._mode == "auto":
+            self._task = kpu.load("/sd/model.kmodel")
+
     def loop(self):
+        if self._mode == "auto":
+            self.predict_drive()
+            return
+
         self.open_recorder()
 
         if self._next_loop_cmd_ms <= time.ticks_ms():
@@ -154,29 +167,32 @@ class App():
         line = self.readLineFromC()
         tag = None
         if line:
+            # print("C: %s" % line)
             tag = line[0:line.find(" ")]
-            if (tag == "hb_c") or (tag == "ctrl"):
-                if self._rec:
-                    s = "v_ms=%d" % (time.ticks_ms())
-                    s += " C=[%s]" % (line)
-                    print("record:" + s)
-                    self._rec.write_string(tag, s)
-            else:
-                #print("ignore:" + line)
-                pass
 
         if tag == "ctrl":
             m = ure.search("power=(-?\d+) steering=(-?\d+) left=(-?\d+) right=(-?\d+)", line)
             if m and (int(m.group(1)) != 0 or int(m.group(2)) != 0 or int(m.group(3)) != 0 or int(m.group(4)) != 0):
                 self._last_active_ms = time.ticks_ms()
-            if (time.ticks_ms() - self._last_active_ms) < 3000:
+            if (time.ticks_ms() - self._last_active_ms) < 1000:
+                s = "v_ms=%d C=[%s]" % (time.ticks_ms(), line)
                 if self._rec:
+                    self._rec.write_string("ctrl", s)
+                    print("R: " + s)
                     self.record()
-                self._next_loop_cmd_ms = 0
+                    self._next_loop_cmd_ms = 0
+                else:
+                    self._next_loop_cmd_ms = time.ticks_ms() + 200
             else:
-                self._next_loop_cmd_ms = time.ticks_ms() + 1000
+                self._next_loop_cmd_ms = time.ticks_ms() + 200
 
         if tag == "hb_c":
+            s = "v_ms=%d C=[%s]" % (time.ticks_ms(), line)
+            if self._rec:
+                self._rec.write_string("hb_c", s)
+                print("R: " + s)
+            else:
+                print("_: " + s)
             m = ure.search("rtc=(\d+)-(\d+)-(\d+)_(\d+):(\d+):(\d+)", line)
             if m:
                 self._timestamp = m.group(1) + m.group(2) + m.group(3) + "_" + m.group(4) + m.group(5) + m.group(6)
@@ -184,9 +200,32 @@ class App():
         self.sometimes_do()
         self._loop_counter += 1
 
+    def predict_drive(self):
+        img = sensor.snapshot()
+        img = img.resize(224, 224)
+        img.pix_to_ai()
+        fmap = kpu.forward(self._task, img)
+        plist = fmap[:]
+        plist = (10, plist[0])
+        #print(plist)
+        #s = "auto v_ms=%d left=%.2f right=%.2f " % (time.ticks_ms(), plist[0], plist[1])
+        s = "auto v_ms=%d power=%.2f steering=%.2f " % (time.ticks_ms(), plist[0], plist[1])
+        self.sendToC(s + "\n")
+        print("V: " + s)
+
+        lcd.display(img)
+        lcd.draw_string(100, 100, "  %.2f    %.2f  " % (plist[0], plist[1]), lcd.YELLOW, lcd.BLACK)
+        img = None
+        gc.collect()
+        time.sleep(0.1)
+        #kpu.deinit(self._task)
+
     def cleanup(self):
         self.close_recorder()
-        uos.umount(self._randisk_mount_point)
+        try:
+            uos.umount(self._ramdisk_mount_point)
+        except OSError as e:
+            print(e)
 
     def sometimes_do(self):
         cnt = int(time.ticks_ms() / 100)
@@ -201,7 +240,7 @@ class App():
             else:
                 self.set_lcd_brightness(7)
 
-            if self._rec and 1 <= self._rec._write_jpeg_count and 20000 < (time.ticks_ms() - self._last_active_ms):
+            if self._rec and 1 <= self._rec._write_jpeg_count and 10000 < (time.ticks_ms() - self._last_active_ms):
                 self.close_recorder()
 
         if cnt % 20 == 0: # every 2sec. heartbeat
@@ -209,7 +248,6 @@ class App():
             self.sendToC(s + "\n")
             print("V: " + s)
             self._last_heartbeat_ms = time.ticks_ms()
-
 
         if False: # debug
             s = ""
@@ -276,8 +314,14 @@ class App():
             return
         if self._timestamp:
             filename = "/sd/record-"+self._timestamp+".bin"
-            print("Open", filename)
-            self._rec = Recorder(filename+".writing")
+            try:
+                self._rec = Recorder(filename+".writing")
+                print("Open", filename)
+                self._error_string = None
+            except OSError as e:
+                # print("Open Failed %s %s" % (filename, e))
+                self._error_string = str(e)
+                self._rec = None
 
     def close_recorder(self):
         if self._rec == None:
@@ -290,8 +334,14 @@ class App():
         print("Close", filename, stat[6], stat)
 
     def system_status_string(self):
-        svfs = uos.statvfs("/sd/")
-        return "v_vbat=%.1f v_temp=%.1f v_ichg=%.1f v_idcg=%.1f v_vusb=%.1f v_iusb=%.1f v_vaps=%.1f v_vex=%.1f v_iex=%.1f v_wbat=%.1f v_warn=%d v_blocks=%d v_bfree=%d" % (
+        try:
+            svfs = uos.statvfs("/sd/")
+            self._error_string = None
+        except OSError as e:
+            self._error_string = str(e)
+            svfs = (None,None,"ERR","ERR")
+
+        return "v_vbat=%.1f v_temp=%.1f v_ichg=%.1f v_idcg=%.1f v_vusb=%.1f v_iusb=%.1f v_vaps=%.1f v_vex=%.1f v_iex=%.1f v_wbat=%.1f v_warn=%d v_blocks=%s v_bfree=%s" % (
             self._axp192.getVbatVoltage(),
             self._axp192.getTemperature(),
             self._axp192.getBatteryChargeCurrent(),
