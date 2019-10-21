@@ -18,10 +18,10 @@
 #include <Wire.h>
 #include <Wiimote.h>
 
-signed char _power         =  0;
-signed char _steering      =  0;
-signed char _power_rate    = 40;
-signed char _steering_rate = 40;
+signed char _ctrl_throttle      =   0;
+signed char _ctrl_steering      =   0;
+signed char _ctrl_throttle_rate = 100;
+signed char _ctrl_steering_rate = 100;
 signed char _pwm_width_ms  = 25;
 
 unsigned long _lastSentToV = 0;
@@ -29,16 +29,17 @@ unsigned long _ctrl_sec    = 0;
 unsigned long _ms          = 0;
 unsigned long _sec         = 0;
 unsigned long _counter     = 0;
-signed int _car_left       = 1;
-signed int _car_right      = 1;
-signed int _output_left    = 0;
-signed int _output_right   = 0;
+
+int _car_l                 = 1;
+int _car_r                 = 1;
+int _output_left           = 0;
+int _output_right          = 0;
 
 unsigned long _auto_ms     = 0;
-//double _auto_left          = 0.0;
-//double _auto_right         = 0.0;
-double _auto_power         = 0.0;
-double _auto_steering      = 0.0;
+int _auto_left             = 0; // -100..100
+int _auto_right            = 0; // -100..100
+int _auto_throttle         = 0; // -100..100
+int _auto_steering         = 0; // -100..100
 
 HardwareSerial serial_ext(2); // Serial from/to V via GROVE
 
@@ -112,7 +113,7 @@ void loop()
     bool loop = strncmp(s.c_str(), "loop ", 5)==0;
     if(loop){
       uint8_t buf[512];
-      size_t size = sprintf((char*)buf, "ctrl c_ms=%ld power=%d steering=%d left=%d right=%d V=[%s]\n", _ms, _power, _steering, _output_left, _output_right, s.c_str());
+      size_t size = sprintf((char*)buf, "ctrl c_ms=%ld throttle=%d steering=%d left=%d right=%d V=[%s]\n", _ms, _ctrl_throttle, _ctrl_steering, _output_left, _output_right, s.c_str());
       sendToV(buf, size);
     }
     if(!loop){
@@ -136,12 +137,22 @@ void loop()
 
     if(strncmp(s.c_str(), "auto ", 5)==0){
       _auto_ms = _ms;
-      _auto_power    = atof(extract_value(s, "power").c_str());
-      _auto_steering = atof(extract_value(s, "steering").c_str());
-      Serial.printf("auto_power=%.2f auto_steering=%.2f\n", _auto_power, _auto_steering);
-      //_auto_left  = atof(extract_value(s, "left").c_str());
-      //_auto_right = atof(extract_value(s, "right").c_str());
-      //Serial.printf("auto_left=%.2f auto_right=%.2f\n", _auto_left, _auto_right);
+      String throttle = extract_value(s, "throttle");
+      if(1 <= throttle.length()){
+        _auto_throttle = atoi(extract_value(s, "throttle").c_str());
+        _auto_steering = atoi(extract_value(s, "steering").c_str());
+        _auto_left     = 0;
+        _auto_right    = 0;
+        Serial.printf("auto_throttle=%2d auto_steering=%2d\n", _auto_throttle, _auto_steering);
+        if(_auto_throttle != 0){ _ctrl_sec = _sec; }
+      }else{
+        _auto_left     = atoi(extract_value(s, "left").c_str());
+        _auto_right    = atoi(extract_value(s, "right").c_str());
+        _auto_throttle = 0;
+        _auto_steering = 0;
+        Serial.printf("auto_left=%2d auto_right=%2d\n", _auto_left, _auto_right);
+        if(_auto_left != 0 || _auto_right != 0){ _ctrl_sec = _sec; }
+      }
     }
   }
 
@@ -190,7 +201,7 @@ void heartbeat(void)
     uint8_t c_warn = M5.Axp.GetWarningLeve();
 
     uint8_t buf[256];
-    size_t size = sprintf((char*)buf, "hb_c c_ms=%ld rtc=%s c_vbat=%.1f c_temp=%.1f c_ichg=%.1f c_idchg=%.1f c_vusb=%.1f c_iusb=%.1f c_vaps=%.1f c_vex=%.1f c_iex=%.1f c_warn=%d power_rate=%d steering_rate=%d pwm_width_ms=%d\n",
+    size_t size = sprintf((char*)buf, "hb_c c_ms=%ld rtc=%s c_vbat=%.1f c_temp=%.1f c_ichg=%.1f c_idchg=%.1f c_vusb=%.1f c_iusb=%.1f c_vaps=%.1f c_vex=%.1f c_iex=%.1f c_warn=%d throttle_rate=%d steering_rate=%d pwm_width_ms=%d\n",
       _ms,
       readRTC().c_str(),
       c_vbat,
@@ -203,8 +214,8 @@ void heartbeat(void)
       c_vex,
       c_iex,
       c_warn,
-      _power_rate,
-      _steering_rate,
+      _ctrl_throttle_rate,
+      _ctrl_steering_rate,
       _pwm_width_ms
     );
     sendToV(buf, size);
@@ -216,34 +227,34 @@ void heartbeat(void)
 void wiimote_control(void)
 {
   static unsigned long last_tick = 0;
-  unsigned long tick = (_ms / 50);
+  unsigned long tick = (_ms / 20);
   if(last_tick < tick){
     if(wiimote_button_2){
-      _power += 1;
+      _ctrl_throttle += 1;
     }
     if(wiimote_button_1){
-      _power -= 1;
+      _ctrl_throttle -= 1;
     }
     if((!wiimote_button_2) && (!wiimote_button_1)){
-      _power *= 0.90;
+      _ctrl_throttle *= 0.95;
     }
 
     if(wiimote_button_left){
-      _steering += 3;
+      _ctrl_steering -= 1;
     }
     if(wiimote_button_right){
-      _steering -= 3;
+      _ctrl_steering += 1;
     }
     if((!wiimote_button_left) && (!wiimote_button_right)){
-      _steering *= 0.80;
+      _ctrl_steering *= 0.95;
     }
 
-    #define WIIMOTE_POWER_MAX    60
-    #define WIIMOTE_STEERING_MAX 60
-    if(_power    < -WIIMOTE_POWER_MAX        ){ _power    = -WIIMOTE_POWER_MAX;    }
-    if(WIIMOTE_POWER_MAX       < _power      ){ _power    =  WIIMOTE_POWER_MAX;    }
-    if(_steering < -WIIMOTE_STEERING_MAX     ){ _steering = -WIIMOTE_STEERING_MAX; }
-    if(WIIMOTE_STEERING_MAX       < _steering){ _steering =  WIIMOTE_STEERING_MAX; }
+    #define WIIMOTE_THROTTLE_MAX 30
+    #define WIIMOTE_STEERING_MAX 100
+    if(_ctrl_throttle < -WIIMOTE_THROTTLE_MAX){ _ctrl_throttle = -WIIMOTE_THROTTLE_MAX; }
+    if(WIIMOTE_THROTTLE_MAX  < _ctrl_throttle){ _ctrl_throttle =  WIIMOTE_THROTTLE_MAX; }
+    if(_ctrl_steering < -WIIMOTE_STEERING_MAX){ _ctrl_steering = -WIIMOTE_STEERING_MAX; }
+    if(WIIMOTE_STEERING_MAX  < _ctrl_steering){ _ctrl_steering =  WIIMOTE_STEERING_MAX; }
 
     last_tick = tick;
   }
@@ -292,9 +303,9 @@ void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
 }
 
 #if USE_BLYNK
-BLYNK_WRITE(V0) // power(-100..+100)
+BLYNK_WRITE(V0) // throttle(-100..+100)
 {
-  _power = param[0].asInt();
+  _throttle = param[0].asInt();
 }
 
 BLYNK_WRITE(V1) // steering(-100..+100)
@@ -302,10 +313,10 @@ BLYNK_WRITE(V1) // steering(-100..+100)
   _steering = param[0].asInt();
 }
 
-BLYNK_WRITE(V11) // power_rate(0..100)
+BLYNK_WRITE(V11) // throttle_rate(0..100)
 {
-  _power_rate = param[0].asInt();
-  Serial.printf("D: _power_rate=%d\n", _power_rate);
+  _throttle_rate = param[0].asInt();
+  Serial.printf("D: _throttle_rate=%d\n", _throttle_rate);
 }
 
 BLYNK_WRITE(V12) // steering_rate(0..100)
@@ -323,51 +334,69 @@ BLYNK_WRITE(V13) // pwm_width_ms(1..500)
 
 void sendToCar()
 {
-  // steer by rate
-  //signed int power    = _power    * 0.3;
-  //signed int steering = _steering * 0.7;
-  //signed int left     = power * (100 - steer) / 100;
-  //signed int right    = power * (100 + steer) / 100;
+  int left  = 0; // -100 .. 100
+  int right = 0; // -100 .. 100
 
-  // steer by abs
-  signed int power    = _power    * _power_rate    / 100;
-  signed int steering = _steering * _steering_rate / 100;
-  if(_ms - _auto_ms < 200){
-    power    = _auto_power;
-    steering = _auto_steering;
+  if((_auto_left != 0 || _auto_right != 0) && (_ms - _auto_ms < 100)){
+    left  = _auto_left;
+    right = _auto_right;
+  }else{
+    int throttle = 0; // -100 .. 100
+    int steering = 0; // -100 .. 100
+
+    if((_auto_throttle != 0 || _auto_steering != 0) && (_ms - _auto_ms < 100)){
+      throttle = _auto_throttle;
+      steering = _auto_steering;
+    }else{
+      throttle = _ctrl_throttle * _ctrl_throttle_rate / 100; // -100 .. 100
+      steering = _ctrl_steering * _ctrl_steering_rate / 100; // -100 .. 100
+    }
+
+    if(1){
+      left  = throttle;
+      right = throttle;
+      if(steering < 0){
+        left  = throttle * (100 + steering) / 100;
+        //right = throttle * (100 - steering) / 100;
+      }else if(0 < steering){
+        //left  = throttle * (100 + steering) / 100;
+        right = throttle * (100 - steering) / 100;
+      }
+    }
+    //  if(0){
+    //    int left  = throttle - steering;
+    //    int right = throttle + steering;
+    //  }
   }
-  signed int left  = power - steering;
-  signed int right = power + steering;
-//  if(_ms - _auto_ms < 200){
-//    left  = _auto_left;
-//    right = _auto_right;
-//  }
+
   _output_left  = left;
   _output_right = right;
 
+  int l = left;
+  int r = right;
   if(true){ // DYI PWM
     #define PWM_ON 127
     #define PWM_WIDTH_US (_pwm_width_ms*1000) // 100 50 25
     long n = 100 * (micros() % PWM_WIDTH_US) / PWM_WIDTH_US; // 0 <= t < 100
-    if(0<left){
-      if(n     < left ){ left =  PWM_ON; }else{ left  = 0; }
+    if(0<l){
+      if(n < l ){ l =  PWM_ON; }else{ l = 0; }
     }else{
-      if(left  < -n   ){ left = -PWM_ON; }else{ left  = 0; }
+      if(l < -n){ l = -PWM_ON; }else{ l = 0; }
     }
-    if(0<right){
-      if(n     < right){ right =  PWM_ON; }else{ right = 0; }
+    if(0<r){
+      if(n < r ){ r =  PWM_ON; }else{ r = 0; }
     }else{
-      if(right < -n   ){ right = -PWM_ON; }else{ right = 0; }
+      if(r < -n){ r = -PWM_ON; }else{ r = 0; }
     }
   }
 
-  if (_car_left != left) {
-    leftwheel((uint8_t)left);
-    _car_left = left;
+  if (_car_l != l) {
+    leftwheel((uint8_t)l);
+    _car_l = l;
   }
-  if (_car_right != right) {
-    rightwheel((uint8_t)right);
-    _car_right = right;
+  if (_car_r != r) {
+    rightwheel((uint8_t)r);
+    _car_r = r;
   }
 }
 
