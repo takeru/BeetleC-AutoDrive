@@ -15,8 +15,6 @@ class App():
         finally:
             self.cleanup()
             self.set_lcd_brightness(7)
-            #lcd.clear(lcd.BLACK)
-            #lcd.draw_string(10, 10, "BeetleC_AutoDrive_V", lcd.RED, lcd.BLACK)
 
     def setup(self):
         self._rec               = None
@@ -45,7 +43,9 @@ class App():
 
         sensor.reset()
         sensor.set_pixformat(sensor.RGB565)
-        sensor.set_framesize(sensor.QVGA)
+        #sensor.set_pixformat(sensor.GRAYSCALE)
+        #sensor.set_framesize(sensor.QVGA)
+        sensor.set_framesize(sensor.QQVGA)
         sensor.set_vflip(1)
         sensor.set_hmirror(1)
         #sensor.set_windowing((224, 224))
@@ -57,7 +57,10 @@ class App():
             # print("mount_point=", mount_point, " stat=", stat)
         except OSError as e:
             pass
-        initRamdisk(self._ramdisk_mount_point)
+        blkdev = RAMFlashDev()
+        vfs = uos.VfsSpiffs(blkdev)
+        vfs.mkfs(vfs)
+        uos.mount(vfs, self._ramdisk_mount_point)
 
         lcd.init(freq=40000000)
         lcd.direction(lcd.YX_RLDU)
@@ -65,7 +68,6 @@ class App():
         lcd.draw_string(10, 10, "BeetleC_AutoDrive_V", lcd.CYAN, lcd.BLACK)
 
         if self._mode == "auto":
-            #self._task = kpu.load("/sd/model.kmodel.20191019_050637")
             self._twoWheelSteeringThrottle = TwoWheelSteeringThrottle()
             self._task = kpu.load("/sd/model.kmodel")
 
@@ -204,8 +206,8 @@ class App():
         if False: # debug
             s = ""
             for addr in [0x28, 0x12, 0x91, 0x33, 0x34, 0x01, 0x7A, 0x7B]:
-              value = self._axp192.__readReg(addr)
-              s += 'REG{:02X}H=0x{:02X} ({:08b}) '.format(addr, value, value)
+                value = self._axp192.__readReg(addr)
+                s += 'REG{:02X}H=0x{:02X} ({:08b}) '.format(addr, value, value)
             print(s)
             r7a = self._axp192.__readReg(0x7A) # 8bit
             r7b = self._axp192.__readReg(0x7B) # 5bit
@@ -393,30 +395,24 @@ class Recorder:
 
 class RAMFlashDev:
     def __init__(self):
-            unit = 128
-            self.fs_size        = 256*unit  # 256*1024
-            self.fs_data        = bytearray(self.fs_size)
-            self.erase_block    =  32*unit  #  32*1024
-            self.log_block_size =  64*unit  #  64*1024
-            self.log_page_size  =   4*unit  #   4*1024
+        unit = 128
+        self.fs_size        = 256*unit  # 256*1024
+        self.fs_data        = bytearray(self.fs_size)
+        self.erase_block    =  32*unit  #  32*1024
+        self.log_block_size =  64*unit  #  64*1024
+        self.log_page_size  =   4*unit  #   4*1024
 
     def read(self,buf,size,addr):
-            for i in range(len(buf)):
-                buf[i] = self.fs_data[addr+i]
+        for i in range(len(buf)):
+            buf[i] = self.fs_data[addr+i]
 
     def write(self,buf,size,addr):
-            for i in range(len(buf)):
-                self.fs_data[addr+i] = buf[i]
+        for i in range(len(buf)):
+            self.fs_data[addr+i] = buf[i]
 
     def erase(self,size,addr):
-            for i in range(size):
-                self.fs_data[addr+i] = 0xff
-
-def initRamdisk(path):
-    blkdev = RAMFlashDev()
-    vfs = uos.VfsSpiffs(blkdev)
-    vfs.mkfs(vfs)
-    uos.mount(vfs, path)
+        for i in range(size):
+            self.fs_data[addr+i] = 0xff
 
 class TwoWheelSteeringThrottle(object):
     def run(self, throttle, steering):

@@ -22,7 +22,7 @@ signed char _ctrl_throttle      =   0;
 signed char _ctrl_steering      =   0;
 signed char _ctrl_throttle_rate = 100;
 signed char _ctrl_steering_rate = 100;
-signed char _pwm_width_ms  = 25;
+signed char _pwm_width_ms       =  25;
 
 unsigned long _lastSentToV = 0;
 unsigned long _ctrl_sec    = 0;
@@ -47,6 +47,7 @@ double _c_vbat = 0;
 double _v_vbat = 0;
 double _c_vusb = 0;
 
+uint8_t wiimote_reporting = 0xFF;
 bool wiimote_button_down  = false;
 bool wiimote_button_up    = false;
 bool wiimote_button_right = false;
@@ -58,6 +59,12 @@ bool wiimote_button_B     = false;
 bool wiimote_button_A     = false;
 bool wiimote_button_minus = false;
 bool wiimote_button_home  = false;
+bool wiimote_button_C     = false;
+bool wiimote_button_Z     = false;
+uint8_t wiimote_SX        = 0xFF;
+uint8_t wiimote_SY        = 0xFF;
+uint8_t wiimote_SX_offset = 0xFF;
+uint8_t wiimote_SY_offset = 0xFF;
 
 void setup()
 {
@@ -236,7 +243,7 @@ void wiimote_control(void)
       _ctrl_throttle -= 1;
     }
     if((!wiimote_button_2) && (!wiimote_button_1)){
-      _ctrl_throttle *= 0.95;
+      _ctrl_throttle *= 0.90;
     }
 
     if(wiimote_button_left){
@@ -246,10 +253,20 @@ void wiimote_control(void)
       _ctrl_steering += 1;
     }
     if((!wiimote_button_left) && (!wiimote_button_right)){
-      _ctrl_steering *= 0.95;
+      _ctrl_steering *= 0.90;
     }
 
-    #define WIIMOTE_THROTTLE_MAX 30
+    if(wiimote_reporting==0x32){
+      if(wiimote_SX_offset==0xFF){ wiimote_SX_offset = wiimote_SX; }
+      if(wiimote_SY_offset==0xFF){ wiimote_SY_offset = wiimote_SY; }
+      _ctrl_throttle = (wiimote_SY - wiimote_SY_offset) / 2 / 5 * 5;
+      _ctrl_steering = (wiimote_SX - wiimote_SX_offset)     / 5 * 5;
+    }else{
+      wiimote_SX_offset = 0xFF;
+      wiimote_SY_offset = 0xFF;
+    }
+
+    #define WIIMOTE_THROTTLE_MAX 35
     #define WIIMOTE_STEERING_MAX 100
     if(_ctrl_throttle < -WIIMOTE_THROTTLE_MAX){ _ctrl_throttle = -WIIMOTE_THROTTLE_MAX; }
     if(WIIMOTE_THROTTLE_MAX  < _ctrl_throttle){ _ctrl_throttle =  WIIMOTE_THROTTLE_MAX; }
@@ -267,6 +284,7 @@ void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
 //  }
 //  Serial.print("\n");
 
+  wiimote_reporting    = data[1];
   wiimote_button_down  = (data[2] & 0x01) != 0;
   wiimote_button_up    = (data[2] & 0x02) != 0;
   wiimote_button_right = (data[2] & 0x04) != 0;
@@ -278,6 +296,19 @@ void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
   wiimote_button_A     = (data[3] & 0x08) != 0;
   wiimote_button_minus = (data[3] & 0x10) != 0;
   wiimote_button_home  = (data[3] & 0x80) != 0;
+  if(wiimote_reporting==0x32){
+    // Nunchuck : TODO check ext controller code.
+    uint8_t* ext = data+4;
+    wiimote_SX         = ext[0];
+    wiimote_SY         = ext[1];
+    wiimote_button_C   = 0==(ext[5]&0x02);
+    wiimote_button_Z   = 0==(ext[5]&0x01);
+  }else{
+    wiimote_SX         = 0xFF;
+    wiimote_SY         = 0xFF;
+    wiimote_button_C   = false;
+    wiimote_button_Z   = false;
+  }
 
   if(wiimote_button_2 && wiimote_button_1){
     led(3, 0x010001);
