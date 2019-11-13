@@ -259,8 +259,8 @@ void wiimote_control(void)
     if(wiimote_reporting==0x32){
       if(wiimote_SX_offset==0xFF){ wiimote_SX_offset = wiimote_SX; }
       if(wiimote_SY_offset==0xFF){ wiimote_SY_offset = wiimote_SY; }
-      _ctrl_throttle = (wiimote_SY - wiimote_SY_offset) / 2 / 5 * 5;
-      _ctrl_steering = (wiimote_SX - wiimote_SX_offset)     / 5 * 5;
+      _ctrl_throttle = (wiimote_SY - wiimote_SY_offset) / 3 / 3 * 3;
+      _ctrl_steering = (wiimote_SX - wiimote_SX_offset)     / 3 * 3;
     }else{
       wiimote_SX_offset = 0xFF;
       wiimote_SY_offset = 0xFF;
@@ -420,16 +420,19 @@ void sendToCar()
     #define PWM_ON 127
     #define PWM_WIDTH_US (_pwm_width_ms*1000) // 100 50 25
     long n = 100 * (micros() % PWM_WIDTH_US) / PWM_WIDTH_US; // 0 <= t < 100
+    double rate = (sin(PI*(-0.5+2.0*n/100.0))+1.0)/2.0;
     if(0<l){
       if(n < l ){ l =  PWM_ON; }else{ l = 0; }
     }else{
       if(l < -n){ l = -PWM_ON; }else{ l = 0; }
     }
+    if(l!=0){ l *= rate; }
     if(0<r){
       if(n < r ){ r =  PWM_ON; }else{ r = 0; }
     }else{
       if(r < -n){ r = -PWM_ON; }else{ r = 0; }
     }
+    if(r!=0){ r *= rate; }
   }
 
   if (_car_l != l) {
