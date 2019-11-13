@@ -18,6 +18,7 @@
 #include <Wire.h>
 #include <Wiimote.h>
 
+Wiimote wiimote;
 signed char _ctrl_throttle      =   0;
 signed char _ctrl_steering      =   0;
 signed char _ctrl_throttle_rate = 100;
@@ -76,8 +77,7 @@ void setup()
   Blynk.setDeviceName("BeetleC-AutoDrive");
   Blynk.begin(auth);
 #endif
-  Wiimote::init();
-  Wiimote::register_callback(1, wiimote_callback);
+  wiimote.init(wiimote_callback);
 
   // M5StickV
   int baud = 1500000; // 115200 1500000 3000000 4500000
@@ -109,7 +109,7 @@ void loop()
 #if USE_BLYNK
   Blynk.run();
 #endif
-  Wiimote::handle();
+  wiimote.handle();
 
   sendToCar();
   heartbeat();
@@ -277,7 +277,18 @@ void wiimote_control(void)
   }
 }
 
-void wiimote_callback(uint8_t number, uint8_t* data, size_t len) {
+void wiimote_callback(wiimote_event_type_t event_type, uint16_t handle, uint8_t *data, size_t len) {
+  if(event_type == WIIMOTE_EVENT_DATA){
+    wiimote_data(data, len);
+  }else if(event_type == WIIMOTE_EVENT_INITIALIZE){
+    wiimote.scan(true);
+  }else if(event_type == WIIMOTE_EVENT_CONNECT){
+    wiimote.scan(false);
+    wiimote.set_led(handle, 0b0001);
+  }
+}
+
+void wiimote_data(uint8_t* data, size_t len) {
 //  Serial.printf("wiimote number=%d len=%d ", number, len);
 //  for (int i = 0; i < len; i++) {
 //    Serial.printf("%02X ", data[i]);
