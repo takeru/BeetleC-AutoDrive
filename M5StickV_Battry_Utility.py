@@ -7,6 +7,8 @@
 
 import lcd
 import pmu
+from Maix import GPIO
+from fpioa_manager import *
 
 class App():
     def main(self):
@@ -19,7 +21,13 @@ class App():
         #lcd.direction(lcd.YX_LRUD)
         lcd.direction(lcd.YX_RLDU)
 
+        fm.register(board_info.BUTTON_A, fm.fpioa.GPIO1)
+        self.button_a = GPIO(GPIO.GPIO1, GPIO.IN, GPIO.PULL_UP)
+        fm.register(board_info.BUTTON_B, fm.fpioa.GPIO2)
+        self.button_b = GPIO(GPIO.GPIO2, GPIO.IN, GPIO.PULL_UP)
+
         self.counter = 0
+        self.last_sec = 0
         self._axp192 = pmu.axp192()
 
         self._axp192.enableADCs(True)
@@ -88,6 +96,19 @@ class App():
         self._axp192.setK210Vcore(0.8)
 
     def loop(self):
+        sec = time.ticks_ms() // 1000
+        if sec != self.last_sec:
+            self.last_sec = sec
+            if sec % 5 == 0:
+                self.update()
+        if self.button_a.value() == 0:
+            lcd.clear(lcd.WHITE)
+            lcd.draw_string(30, 30, "Sleep...", lcd.RED, lcd.WHITE)
+            time.sleep_ms(3000)
+            self._axp192.setEnterSleepMode()
+        time.sleep_ms(1)
+
+    def update(self):
         self.printRegs()
 
         self.counter += 1
@@ -140,14 +161,10 @@ class App():
         else:
             colors = (lcd.ORANGE, lcd.BLUE, "[>>>]")
         lcd.draw_string(20, 63, "IChg: %.1fmA %s" % (ichg, colors[2]), colors[0], colors[1])
-
-
-
         lcd.draw_string(20, 100, "IDcg: %.1fmA" % (self._axp192.getBatteryDischargeCurrent()), lcd.WHITE, lcd.BLACK)
         lcd.draw_string(20, 115, "USB : %.1fmV, %.1fmA" % (self._axp192.getUSBVoltage(), self._axp192.getUSBInputCurrent()), lcd.WHITE, lcd.BLACK)
 
         #lcd.draw_string(2, 50, "EX=%.1fmV,%.1fmA" % (self._axp192.getConnextVoltage(), self._axp192.getConnextInputCurrent()), lcd.WHITE, lcd.BLACK)
-        time.sleep(5)
 
         if self.counter % 5 == 0 and self._axp192.getBatteryChargeCurrent() < 15.0:
             self.resetCharge()
