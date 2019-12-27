@@ -8,7 +8,6 @@
   #include <BlynkSimpleEsp32_BLE.h>
   #include <BLEDevice.h>
   #include <BLEServer.h>
-  #include "secret.h"
   //char auth[] = "*****";
 #endif
 
@@ -16,6 +15,10 @@
 #include <M5StickC.h>
 #include <Arduino.h>
 #include <Wire.h>
+#include <Preferences.h>
+#include <WiFiClientSecure.h>
+#include "secret.h"
+
 #include <Wiimote.h>
 
 Wiimote wiimote;
@@ -23,7 +26,7 @@ signed char _ctrl_throttle      =   0;
 signed char _ctrl_steering      =   0;
 signed char _ctrl_throttle_rate = 100;
 signed char _ctrl_steering_rate = 100;
-signed char _pwm_width_ms       =  25;
+signed char _pwm_width_ms       =  20;
 
 unsigned long _lastSentToV = 0;
 unsigned long _ctrl_sec    = 0;
@@ -80,9 +83,9 @@ void setup()
   wiimote.init(wiimote_callback);
 
   // M5StickV
-  int baud = 1500000; // 115200 1500000 3000000 4500000
+  int baud = 115200; // 115200 1500000 3000000 4500000
   serial_ext.begin(baud, SERIAL_8N1, 32, 33);
-  serial_ext.setTimeout(1);
+  serial_ext.setTimeout(10);
 
   // LCD
   M5.Axp.ScreenBreath(8);
@@ -117,13 +120,11 @@ void loop()
   String s;
   s = readLineFromV();
   if (0 < s.length()) {
-    bool loop = strncmp(s.c_str(), "loop ", 5)==0;
-    if(loop){
+    if(strncmp(s.c_str(), "loop ", 5)==0){
       uint8_t buf[512];
       size_t size = sprintf((char*)buf, "ctrl c_ms=%ld throttle=%d steering=%d left=%d right=%d V=[%s]\n", _ms, _ctrl_throttle, _ctrl_steering, _output_left, _output_right, s.c_str());
       sendToV(buf, size);
-    }
-    if(!loop){
+    }else{
       Serial.printf("V: %s\n", s.c_str());
     }
 
@@ -161,6 +162,22 @@ void loop()
         if(_auto_left != 0 || _auto_right != 0){ _ctrl_sec = _sec; }
       }
     }
+
+    if(strncmp(s.c_str(), "img ", 4)==0){
+      recvImg();
+    }
+  }
+
+  static int snapshot_button_status = 0;
+  if(snapshot_button_status==0 && wiimote_button_plus){
+    snapshot_button_status = 1;
+  }else if(snapshot_button_status==1 && !wiimote_button_plus){
+    snapshot_button_status = 2;
+  }else if(snapshot_button_status==2){
+    uint8_t buf[512];
+    size_t size = sprintf((char*)buf, "snapshot a=1\n");
+    sendToV(buf, size);
+    snapshot_button_status = 0;
   }
 
   s = readLineFromDebug();
@@ -259,15 +276,24 @@ void wiimote_control(void)
     if(wiimote_reporting==0x32){
       if(wiimote_SX_offset==0xFF){ wiimote_SX_offset = wiimote_SX; }
       if(wiimote_SY_offset==0xFF){ wiimote_SY_offset = wiimote_SY; }
-      _ctrl_throttle = (wiimote_SY - wiimote_SY_offset) / 3 / 3 * 3;
-      _ctrl_steering = (wiimote_SX - wiimote_SX_offset)     / 3 * 3;
+      Serial.printf("SX=%d SY=%d\n", (wiimote_SX - wiimote_SX_offset), (wiimote_SY - wiimote_SY_offset));
+      // (SX,SY)     0,94
+      //     -75,70        82,73
+      // -101,0               108,0
+      //     -74,-77       77,-77
+      //            0,-102
+
+      _ctrl_throttle = (wiimote_SY - wiimote_SY_offset) / 70.0 * 100 * 0.4;
+      _ctrl_steering = (wiimote_SX - wiimote_SX_offset) / 70.0 * 100 * 0.4;
+      if(abs(_ctrl_throttle)<=1){ _ctrl_throttle = 0; }
+      if(abs(_ctrl_steering)<=1){ _ctrl_steering = 0; }
     }else{
       wiimote_SX_offset = 0xFF;
       wiimote_SY_offset = 0xFF;
     }
 
-    #define WIIMOTE_THROTTLE_MAX 35
-    #define WIIMOTE_STEERING_MAX 100
+    #define WIIMOTE_THROTTLE_MAX   100
+    #define WIIMOTE_STEERING_MAX   100
     if(_ctrl_throttle < -WIIMOTE_THROTTLE_MAX){ _ctrl_throttle = -WIIMOTE_THROTTLE_MAX; }
     if(WIIMOTE_THROTTLE_MAX  < _ctrl_throttle){ _ctrl_throttle =  WIIMOTE_THROTTLE_MAX; }
     if(_ctrl_steering < -WIIMOTE_STEERING_MAX){ _ctrl_steering = -WIIMOTE_STEERING_MAX; }
@@ -379,14 +405,14 @@ void sendToCar()
   int left  = 0; // -100 .. 100
   int right = 0; // -100 .. 100
 
-  if((_auto_left != 0 || _auto_right != 0) && (_ms - _auto_ms < 100)){
+  if((_auto_left != 0 || _auto_right != 0) && (_ms - _auto_ms < 300)){
     left  = _auto_left;
     right = _auto_right;
   }else{
     int throttle = 0; // -100 .. 100
     int steering = 0; // -100 .. 100
 
-    if((_auto_throttle != 0 || _auto_steering != 0) && (_ms - _auto_ms < 100)){
+    if((_auto_throttle != 0 || _auto_steering != 0) && (_ms - _auto_ms < 300)){
       throttle = _auto_throttle;
       steering = _auto_steering;
     }else{
@@ -399,9 +425,9 @@ void sendToCar()
       right = throttle;
       if(steering < 0){
         left  = throttle * (100 + steering) / 100;
-        //right = throttle * (100 - steering) / 100;
+        right = throttle * (100 - steering) / 100;
       }else if(0 < steering){
-        //left  = throttle * (100 + steering) / 100;
+        left  = throttle * (100 + steering) / 100;
         right = throttle * (100 - steering) / 100;
       }
     }
@@ -682,4 +708,125 @@ void m5stickc_led(bool on)
   static bool init = false;
   if(!init){ pinMode(GPIO_NUM_10, OUTPUT); init = true; }
   digitalWrite(GPIO_NUM_10, on ? LOW : HIGH);
+}
+
+bool wifi_connect(int timeout_ms)
+{
+  if(WiFi.status() == WL_CONNECTED){
+    return true;
+  }
+
+  Preferences preferences;
+  char wifi_ssid[33];
+  char wifi_key[65];
+
+  preferences.begin("Wi-Fi", true);
+  preferences.getString("ssid", wifi_ssid, sizeof(wifi_ssid));
+  preferences.getString("key", wifi_key, sizeof(wifi_key));
+  preferences.end();
+
+  WiFi.begin(wifi_ssid, wifi_key);
+  unsigned long start_ms = millis();
+  bool connected = false;
+  while(1){
+    connected = WiFi.status() == WL_CONNECTED;
+    if(connected || (start_ms+timeout_ms)<millis()){
+      break;
+    }
+    delay(1);
+  }
+  return connected;
+}
+
+void wifi_disconnect(){
+  if(WiFi.status() != WL_DISCONNECTED){
+    WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
+  }
+}
+
+// https://qiita.com/nnn112358/items/5efd926fea20cd6c2c43
+void recvImg(void){
+  for(int i=0; i<100; i++){ if(10<=serial_ext.available()){ break; }else{ delay(1); } }
+  uint8_t rx_buffer[10];
+  int rx_size = serial_ext.readBytes(rx_buffer, 10);
+  if (rx_size!=10){ return; }
+
+  uint8_t packet_begin[3] = { 0xFF, 0xD8, 0xEA };
+  if ((rx_buffer[0] == packet_begin[0]) && (rx_buffer[1] == packet_begin[1]) && (rx_buffer[2] == packet_begin[2])) {
+    // ok
+  }else{
+    return;
+  }
+
+  uint32_t len = (uint32_t)(rx_buffer[4] << 16) | (rx_buffer[5] << 8) | rx_buffer[6];
+  uint8_t *buf = (uint8_t*)malloc(len);
+  int ofs = 0;
+  while(true){
+    for(int i=0; i<100; i++){ if(1<=serial_ext.available()){ break; }else{ delay(1); } }
+    int n = serial_ext.readBytes(buf+ofs, len-ofs);
+    Serial.printf("recvImg: len=%d ofs=%d n=%d\n", len, ofs, n);
+    if(n<0){ break; }
+    ofs += n;
+    if(len<=ofs){ break; }
+  }
+
+  wifi_connect(10*1000);
+  sendToLineNotify("", buf, len);
+  wifi_disconnect();
+  free(buf);
+}
+
+// https://github.com/anoken/purin_wo_mimamoru_gijutsu/blob/master/2_6_M5Camera_Send_LineNotify/2_6_M5Camera_Send_LineNotify.ino
+void sendToLineNotify(String message, uint8_t* image_data, size_t image_size) {
+  WiFiClientSecure client;
+  if(!client.connect("notify-api.line.me", 443)){
+    return;
+  }
+
+  String boundary = "boundaryboundaryboundary";
+  String body = "--" + boundary + "\r\n";
+  body += "Content-Disposition: form-data; name=\"message\"\r\n\r\n" + message + " \r\n";
+  if(0<image_size){
+    body += "--" + boundary + "\r\n";
+    body += "Content-Disposition: form-data; name=\"imageFile\"; filename=\"image.jpg\"\r\n";
+    body += "Content-Type: image/jpeg\r\n\r\n";
+  }
+  String body_end = "--" + boundary + "--\r\n";
+  size_t content_length = body.length() + image_size + body_end.length();
+
+  String header = "POST /api/notify HTTP/1.1\r\n";
+  header += "Host: notify-api.line.me\r\n";
+  header += "Authorization: Bearer " + String(line_notify_token) + "\r\n";
+  header += "User-Agent: " + String("M5StickC") + "\r\n";
+  header += "Connection: close\r\n";
+  header += "Cache-Control: no-cache\r\n";
+  header += "Content-Length: " + String(content_length) + "\r\n";
+  header += "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n\r\n";
+  client.print(header + body);
+  Serial.print(String("====\n") + header + body + "====\n");
+
+  if(0<image_size){
+    int ofs = 0;
+    while(true) {
+      int n = client.write(image_data+ofs, image_size-ofs);
+      Serial.printf("sendToLineNotify: image_size=%d ofs=%d n=%d\n", image_size, ofs, n);
+      if(n<=0){
+        break;
+      }
+      ofs += n;
+      if(image_size<=ofs){ break; }
+    }
+  }
+  client.print("\r\n" + body_end);
+
+  while(client.connected() && !client.available()){
+    delay(10);
+  }
+  if(client.connected() && client.available()){
+    String resp = client.readStringUntil('\n');
+    //int status_code = resp.substring(resp.indexOf(" ") + 1, resp.indexOf(" ", resp.indexOf(" ") + 1)).toInt();
+    Serial.println(resp);
+  }
+  client.stop();
 }

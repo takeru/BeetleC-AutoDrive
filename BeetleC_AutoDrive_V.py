@@ -1,5 +1,6 @@
 import sensor, image, time, pmu, ure, uos, lcd, gc
-from fpioa_manager import fm
+from Maix import GPIO
+from fpioa_manager import fm, board_info
 from machine import UART
 import KPU as kpu
 
@@ -17,6 +18,7 @@ class App():
             self.set_lcd_brightness(7)
 
     def setup(self):
+        print(kpu.memtest())
         self._rec               = None
         self._record_count      = 0
         self._loop_counter      = 0
@@ -28,17 +30,23 @@ class App():
         self._timestamp         = None
         self._ramdisk_mount_point = "/ramdisk"
         self._task              = None
-        self._mode              = "rec"
-        #self._mode              = "auto"
+        #self._mode              = "rec"
+        self._mode              = "auto"
+        self._flag_send_img_to_C = False
 
         self._axp192 = pmu.axp192()
         self._axp192.enableADCs(True)
         self._axp192.enableCoulombCounter(False)
         self.set_lcd_brightness(9)
 
+        fm.register(board_info.BUTTON_A, fm.fpioa.GPIO1)
+        self.button_a = GPIO(GPIO.GPIO1, GPIO.IN, GPIO.PULL_UP)
+        fm.register(board_info.BUTTON_B, fm.fpioa.GPIO2)
+        self.button_b = GPIO(GPIO.GPIO2, GPIO.IN, GPIO.PULL_UP)
+
         fm.register(35, fm.fpioa.UART2_TX, force=True)
         fm.register(34, fm.fpioa.UART2_RX, force=True)
-        baud = 1500000 # 115200 1500000 3000000 4500000
+        baud = 115200 # 115200 1500000 3000000 4500000
         self.uart = UART(UART.UART2, baud, 8, 0, 0, timeout=1000, read_buf_len=4096)
 
         sensor.reset()
@@ -46,8 +54,8 @@ class App():
         #sensor.set_pixformat(sensor.GRAYSCALE)
         #sensor.set_framesize(sensor.QVGA)
         sensor.set_framesize(sensor.QQVGA)
-        sensor.set_vflip(1)
-        sensor.set_hmirror(1)
+        #sensor.set_vflip(1)
+        #sensor.set_hmirror(1) # if set 1, storange color!!!
         #sensor.set_windowing((224, 224))
         sensor.run(1)
 
@@ -68,8 +76,10 @@ class App():
         lcd.draw_string(10, 10, "BeetleC_AutoDrive_V", lcd.CYAN, lcd.BLACK)
 
         if self._mode == "auto":
-            self._twoWheelSteeringThrottle = TwoWheelSteeringThrottle()
+            #self._twoWheelSteeringThrottle = TwoWheelSteeringThrottle()
+            print(kpu.memtest())
             self._task = kpu.load("/sd/model.kmodel")
+            print(kpu.memtest())
 
     def loop(self):
         if self._mode == "auto":
@@ -120,13 +130,14 @@ class App():
             if m:
                 self._timestamp = m.group(1) + m.group(2) + m.group(3) + "_" + m.group(4) + m.group(5) + m.group(6)
 
+        if tag == "snapshot":
+            self._flag_send_img_to_C = True
+
         self.sometimes_do()
         self._loop_counter += 1
 
-
     def autopilot_loop(self):
         img = sensor.snapshot()
-        #img = img.resize(160, 120)
         img = img.resize(224, 224)
         #img.draw_rectangle(0, 0, 224, 93, color=(0,0,0), fill=True)
         #img.draw_rectangle(0, 0, 224, 224, color=(255,0,0), fill=False)
@@ -134,42 +145,38 @@ class App():
         img.pix_to_ai()
         fmap = kpu.forward(self._task, img)
         plist = fmap[:]
-
-        #print("sum=", sum(plist))
-        print(" ".join(["%2d" % (p*10) for p in plist]))
-
-        pmax = max(plist)
-        max_index = plist.index(pmax)
-        print((" " * (3*max_index)) + "**")
-        siz = len(plist) // 2
-        st = (max_index - siz) / siz
-        th = 0.3
-        #if st < 0.0:
-        #    st = -1.0
-        #    th = 0.2
-        #if 0.0 < st:
-        #    st = 1.0
-        #    th = 0.2
-        print("th=", th, " st=", st)
-        left, right = self._twoWheelSteeringThrottle.run(th, st)
-        left  = int(left  * 100)
-        right = int(right * 100)
-        s = "auto v_ms=%d left=%d right=%d " % (time.ticks_ms(), left, right)
-        #s = "auto v_ms=%d throttle=%2d steering=%2d " % (time.ticks_ms(), throttle, steering)
-        self.sendToC(s + "\n")
-        print("V: " + s)
+        if True:
+            # categorical model
+            pmax = max(plist)
+            max_index = plist.index(pmax)
+            print(" ".join(["%2d" % (p*10) for p in plist]))
+            print((" " * (3*max_index)) + "**")
+            siz = len(plist) // 2
+            steering = 45 * ((max_index - siz) / siz)
+            throttle = 45
+            print("throttle=", throttle, " steering=", steering)
+            #left, right = self._twoWheelSteeringThrottle.run(throttle, steering)
+            #left  = int(left  * 100)
+            #right = int(right * 100)
+            #s = "auto v_ms=%d left=%d right=%d " % (time.ticks_ms(), left, right)
+            s = "auto v_ms=%d throttle=%d steering=%d " % (time.ticks_ms(), throttle, steering)
+            self.sendToC(s + "\n")
+            print("V: " + s)
+        if False:
+            # liner model
+            print("plist=", plist)
+            steering = plist[0] - 100
+            throttle = 40
+            #print("throttle=", throttle, " steering=", steering)
+            s = "auto v_ms=%d throttle=%d steering=%d " % (time.ticks_ms(), throttle, steering)
+            self.sendToC(s + "\n")
+            print("V: " + s)
 
         lcd.display(img)
         img = None
         gc.collect()
-
-        lcd.draw_string(20, 100, "  %d    %d  " % (left, right), lcd.YELLOW, lcd.BLACK)
-
-        #time.sleep(0.1)
-        if self._axp192.getKeyStuatus() == 2:
-            lcd.clear(lcd.RED)
-            time.sleep_ms(1000)
-            self._axp192.setEnterSleepMode()
+        #lcd.draw_string(20, 100, "  %d    %d  " % (left, right), lcd.YELLOW, lcd.BLACK)
+        #self.check_sleep_mode()
 
     def cleanup(self):
         self.close_recorder()
@@ -196,12 +203,13 @@ class App():
 
             if self._rec and 1 <= self._rec._write_jpeg_count and 10000 < (time.ticks_ms() - self._last_active_ms):
                 self.close_recorder()
+            self.check_send_img_to_C()
+            self.check_sleep_mode()
 
         if cnt % 20 == 0: # every 2sec. heartbeat
             s = ("hb_v v_ms=%d v_records=%d v_loop=%d " % (time.ticks_ms(), self._record_count, self._loop_counter)) + self.system_status_string()
             self.sendToC(s + "\n")
             print("V: " + s)
-            self._last_heartbeat_ms = time.ticks_ms()
 
         if False: # debug
             s = ""
@@ -213,7 +221,6 @@ class App():
             r7b = self._axp192.__readReg(0x7B) # 5bit
             ichg = (r7a << 5 | (r7b & 0x1F)) * 0.5
             print("ichg=%.3f" % ichg)
-
 
         if cnt % 60 == 0: # every 6sec.
             if 5000 < (time.ticks_ms() - self._last_active_ms):
@@ -237,7 +244,6 @@ class App():
     def sendToC(self, data):
         # data = bytearray([0x00,0x00,0x00,0x00,0x00])
         self.uart.write(data)
-        #time.sleep(0.001) # シリアルコンソールが文字化けする場合の対策sleep
 
     def readFromC(self, num):
         return self.uart.read(num)
@@ -338,6 +344,31 @@ class App():
         #reg0x33 = self.axp192.__readReg(0x33)
         #print("reg0x33=%02X" % (reg0x33))
 
+    def check_sleep_mode(self):
+        if self.button_a.value() == 0:
+            lcd.clear(lcd.WHITE)
+            lcd.draw_string(30, 30, "Sleep...", lcd.RED, lcd.WHITE)
+            time.sleep_ms(3000)
+            self._axp192.setEnterSleepMode()
+
+    def check_send_img_to_C(self):
+        if self._flag_send_img_to_C:
+            self.sendToC("img a=1")
+            img = sensor.snapshot()
+            #img = img.resize(224, 224)
+            self.send_img(img)
+            self._flag_send_img_to_C = False
+
+# https://qiita.com/nnn112358/items/5efd926fea20cd6c2c43
+    def send_img(self, img):
+        img_buf = img.compress() # quality=70
+        img_size1 = (img_buf.size()& 0xFF0000)>>16
+        img_size2 = (img_buf.size()& 0x00FF00)>>8
+        img_size3 = (img_buf.size()& 0x0000FF)>>0
+        data_packet = bytearray([0xFF,0xD8,0xEA,0x01,img_size1,img_size2,img_size3,0x00,0x00,0x00])
+        self.sendToC(data_packet)
+        self.sendToC(img_buf)
+
 #===================================================================================================
 class Recorder:
     def __init__(self, filename):
@@ -414,7 +445,7 @@ class RAMFlashDev:
         for i in range(size):
             self.fs_data[addr+i] = 0xff
 
-class TwoWheelSteeringThrottle(object):
+class TwoWheelSteeringThrottle_xxx(object):
     def run(self, throttle, steering):
         if throttle > 1 or throttle < -1:
             raise ValueError( "throttle must be between 1(forward) and -1(reverse)")
@@ -426,9 +457,11 @@ class TwoWheelSteeringThrottle(object):
         right_motor_speed = throttle
 
         if steering < 0:
-            left_motor_speed *= (1.0 - (-steering))
+            left_motor_speed  *= (1.0 - (-steering))
+            right_motor_speed *= (1.0 - steering)
         elif steering > 0:
             right_motor_speed *= (1.0 - steering)
+            left_motor_speed  *= (1.0 - (-steering))
 
         return left_motor_speed, right_motor_speed
 
