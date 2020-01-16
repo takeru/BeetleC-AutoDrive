@@ -18,15 +18,16 @@
 #include <Preferences.h>
 #include <WiFiClientSecure.h>
 #include "secret.h"
+#include "IIC_servo.h"
 
 #include <Wiimote.h>
 
 Wiimote wiimote;
-signed char _ctrl_throttle      =   0;
-signed char _ctrl_steering      =   0;
-signed char _ctrl_throttle_rate = 100;
-signed char _ctrl_steering_rate = 100;
-signed char _pwm_width_ms       =  20;
+int _ctrl_throttle      =   0;
+int _ctrl_steering      =   0;
+int _ctrl_throttle_rate = 100;
+int _ctrl_steering_rate = 100;
+int _pwm_width_ms       =  20;
 
 unsigned long _lastSentToV = 0;
 unsigned long _ctrl_sec    = 0;
@@ -70,6 +71,31 @@ uint8_t wiimote_SY        = 0xFF;
 uint8_t wiimote_SX_offset = 0xFF;
 uint8_t wiimote_SY_offset = 0xFF;
 
+
+#define SERVO_CH_L 8
+#define SERVO_CH_R 4
+
+//#define SERVO_CENTER_L 1500 // back
+//#define SERVO_CENTER_L 1525 // back
+//#define SERVO_CENTER_L 1528 // back
+//#define SERVO_CENTER_L 1529 // center(back)
+#define SERVO_CENTER_L 1530
+//#define SERVO_CENTER_L 1530 // center(front)
+//#define SERVO_CENTER_L 1550 // front
+
+
+//#define SERVO_CENTER_R 1525 // center(front)
+//#define SERVO_CENTER_R 1526 // center(front)
+//#define SERVO_CENTER_R 1527 // center(front)
+//#define SERVO_CENTER_R 1528 // center(front)
+//#define SERVO_CENTER_R 1529 // center(front)
+#define SERVO_CENTER_R 1529
+//#define SERVO_CENTER_R 1530 // center(back)
+
+#define SERVO_RATE_L   1.00
+#define SERVO_RATE_R   1.05
+
+
 void setup()
 {
   M5.begin();
@@ -93,8 +119,8 @@ void setup()
   M5.Lcd.setTextFont(1);
   M5.Lcd.setTextSize(1);
 
-  // Control BeetleC Motor,LED
-  Wire.begin(0, 26);
+  // 8ServosHat
+  IIC_Servo_Init();
 
   leftwheel(0);
   rightwheel(0);
@@ -276,15 +302,15 @@ void wiimote_control(void)
     if(wiimote_reporting==0x32){
       if(wiimote_SX_offset==0xFF){ wiimote_SX_offset = wiimote_SX; }
       if(wiimote_SY_offset==0xFF){ wiimote_SY_offset = wiimote_SY; }
-      Serial.printf("SX=%d SY=%d\n", (wiimote_SX - wiimote_SX_offset), (wiimote_SY - wiimote_SY_offset));
+      //Serial.printf("SX=%d SY=%d\n", (wiimote_SX - wiimote_SX_offset), (wiimote_SY - wiimote_SY_offset));
       // (SX,SY)     0,94
       //     -75,70        82,73
       // -101,0               108,0
       //     -74,-77       77,-77
       //            0,-102
 
-      _ctrl_throttle = (wiimote_SY - wiimote_SY_offset) / 70.0 * 100 * 0.4;
-      _ctrl_steering = (wiimote_SX - wiimote_SX_offset) / 70.0 * 100 * 0.4;
+      _ctrl_throttle = (wiimote_SY - wiimote_SY_offset) / 70.0 * 100;
+      _ctrl_steering = (wiimote_SX - wiimote_SX_offset) / 70.0 * 100;
       if(abs(_ctrl_throttle)<=1){ _ctrl_throttle = 0; }
       if(abs(_ctrl_steering)<=1){ _ctrl_steering = 0; }
     }else{
@@ -424,17 +450,13 @@ void sendToCar()
       left  = throttle;
       right = throttle;
       if(steering < 0){
-        left  = throttle * (100 + steering) / 100;
-        right = throttle * (100 - steering) / 100;
+        left  = throttle * (100 + steering) / 100; // original
+      //right = throttle * (100 - steering) / 100; // extra
       }else if(0 < steering){
-        left  = throttle * (100 + steering) / 100;
-        right = throttle * (100 - steering) / 100;
+      //left  = throttle * (100 + steering) / 100; // extra
+        right = throttle * (100 - steering) / 100; // original
       }
     }
-    //  if(0){
-    //    int left  = throttle - steering;
-    //    int right = throttle + steering;
-    //  }
   }
 
   _output_left  = left;
@@ -442,31 +464,15 @@ void sendToCar()
 
   int l = left;
   int r = right;
-  if(true){ // DYI PWM
-    #define PWM_ON 127
-    #define PWM_WIDTH_US (_pwm_width_ms*1000) // 100 50 25
-    long n = 100 * (micros() % PWM_WIDTH_US) / PWM_WIDTH_US; // 0 <= t < 100
-    double rate = (sin(PI*(-0.5+2.0*n/100.0))+1.0)/2.0;
-    if(0<l){
-      if(n < l ){ l =  PWM_ON; }else{ l = 0; }
-    }else{
-      if(l < -n){ l = -PWM_ON; }else{ l = 0; }
-    }
-    if(l!=0){ l *= rate; }
-    if(0<r){
-      if(n < r ){ r =  PWM_ON; }else{ r = 0; }
-    }else{
-      if(r < -n){ r = -PWM_ON; }else{ r = 0; }
-    }
-    if(r!=0){ r *= rate; }
+  if (_car_l != l || _car_r != r) {
+    Serial.printf("l=%d r=%d\n", l, r);
   }
-
   if (_car_l != l) {
-    leftwheel((uint8_t)l);
+    leftwheel(l);
     _car_l = l;
   }
   if (_car_r != r) {
-    rightwheel((uint8_t)r);
+    rightwheel(r);
     _car_r = r;
   }
 }
@@ -513,28 +519,15 @@ String readRTC(void)
   return String(datetime);
 }
 
-void leftwheel(uint8_t val) {
-  Wire.beginTransmission(0x38);
-  Wire.write(0x00);
-  Wire.write(val);
-  Wire.endTransmission();
+void leftwheel(int left) {
+  Servo_pulse_set(SERVO_CH_L, int(SERVO_CENTER_L + SERVO_RATE_L * 550*left /100));
 }
 
-void rightwheel(uint8_t val) {
-  Wire.beginTransmission(0x38);
-  Wire.write(0x01);
-  Wire.write(val);
-  Wire.endTransmission();
+void rightwheel(int right) {
+  Servo_pulse_set(SERVO_CH_R, int(SERVO_CENTER_R - SERVO_RATE_R * 550*right/100));
 }
 
 void led(uint8_t num, uint32_t val) {
-  Wire.beginTransmission(0x38);
-  Wire.write(0x02);
-  Wire.write(num);
-  Wire.write(uint8_t(val >> 16));
-  Wire.write(uint8_t(val >> 8));
-  Wire.write(uint8_t(val & 0x0f));
-  Wire.endTransmission();
 }
 
 void update_screen(){
